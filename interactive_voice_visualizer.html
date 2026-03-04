@@ -354,25 +354,27 @@ function handleSpeakResponse(data) {
 
   if (b64) {
     // Backend-generated audio – decode and play via HTMLAudioElement
-    try {
-      const binary = atob(b64);
-      const buf    = Uint8Array.from(binary, c => c.charCodeAt(0));
-      const blob   = new Blob([buf], { type: mime });
-      const url    = URL.createObjectURL(blob);
+    const dataUrl = `data:${mime};base64,${b64}`;
 
-      // Revoke old object URL to avoid leaks
-      if (audioPlayer.src && audioPlayer.src.startsWith("blob:")) {
-        URL.revokeObjectURL(audioPlayer.src);
-      }
-      audioPlayer.src = url;
-      audioSection.classList.add("visible");
-      audioPlayer.play().catch(err => {
-        addLog(`Audio play blocked: ${err.message} (user gesture required)`);
+    fetch(dataUrl)
+      .then(response => response.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+
+        // Revoke old object URL to avoid leaks
+        if (audioPlayer.src && audioPlayer.src.startsWith("blob:")) {
+          URL.revokeObjectURL(audioPlayer.src);
+        }
+        audioPlayer.src = url;
+        audioSection.classList.add("visible");
+        return audioPlayer.play().catch(err => {
+          addLog(`Audio play blocked: ${err.message} (user gesture required)`);
+        });
+      })
+      .catch(err => {
+        addLog(`Audio decode/play error: ${err.message}`);
+        fallbackSpeech(text);
       });
-    } catch (err) {
-      addLog(`Audio decode error: ${err.message}`);
-      fallbackSpeech(text);
-    }
   } else {
     // Fallback: browser speechSynthesis when no audio payload
     addLog("No audio_base64 – falling back to speechSynthesis");
