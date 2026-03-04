@@ -1,0 +1,26 @@
+# Generated / user-specific files
+custom_voice_config.py
+voice_samples/
+voice_detection_log.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
