@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.env
+*.log
+voice_detection_log.json
+custom_voice_config.py
+voice_samples/
