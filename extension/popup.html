@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice AI TTS</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      width: 340px;
+      padding: 16px;
+    }
+    h1 { font-size: 1rem; margin-bottom: 12px; color: #4CC9F0; }
+    label { display: block; font-size: 0.8rem; margin-bottom: 4px; color: #aaa; }
+    textarea, select, input {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #16213e;
+      color: #eee;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
+    textarea { resize: vertical; min-height: 80px; }
+    button {
+      width: 100%;
+      padding: 9px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    #btn-speak  { background: #4CC9F0; color: #000; }
+    #btn-scam   { background: #F72585; color: #fff; }
+    #btn-legit  { background: #06D6A0; color: #000; }
+    #btn-settings { background: #333; color: #eee; }
+    #status {
+      margin-top: 8px;
+      font-size: 0.8rem;
+      min-height: 1.2em;
+      color: #FFD166;
+      text-align: center;
+    }
+    .settings-panel {
+      display: none;
+      margin-top: 10px;
+      border-top: 1px solid #333;
+      padding-top: 10px;
+    }
+    .settings-panel.open { display: block; }
+  </style>
+</head>
+<body>
+  <h1>🎙️ Voice AI TTS</h1>
+
+  <label for="text-input">Text</label>
+  <textarea id="text-input" placeholder="Enter text to speak…"></textarea>
+
+  <label for="call-type">Call Type</label>
+  <select id="call-type">
+    <option value="LEGITIMATE">LEGITIMATE</option>
+    <option value="SCAM_DETECTED">SCAM_DETECTED</option>
+    <option value="VERIFICATION">VERIFICATION</option>
+  </select>
+
+  <button id="btn-speak">▶ Speak</button>
+  <button id="btn-scam">🚨 Test Scam</button>
+  <button id="btn-legit">✅ Test Legitimate</button>
+  <button id="btn-settings">⚙️ Settings</button>
+
+  <div id="status"></div>
+
+  <div class="settings-panel" id="settings-panel">
+    <label for="setting-url">Server URL</label>
+    <input id="setting-url" type="text" placeholder="http://127.0.0.1:5000" />
+    <label for="setting-token">Token (X-Voice-Token)</label>
+    <input id="setting-token" type="password" placeholder="your-secret-token" />
+    <button id="btn-save-settings" style="background:#7209B7;color:#fff;">💾 Save Settings</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
