@@ -63,7 +63,7 @@ def synthesize_speech(
         voice_id = voice_settings.get("voice_id")
 
         # Build the speech config
-        if voice_id and voice_id not in ("default", ""):
+        if voice_id and voice_id != "default":
             voice_cfg = genai_types.VoiceConfig(
                 prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
                     voice_name=voice_id
