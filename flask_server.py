@@ -116,7 +116,7 @@ def tts():
     call_type = data.get("call_type", "LEGITIMATE").strip().upper()
 
     voice_settings = _resolve_voice_settings(call_type)
-    audio_bytes, mime_type, error = synthesize_speech(text, voice_settings)
+    audio_bytes, mime_type, error, _effective_text = synthesize_speech(text, voice_settings)
 
     if error:
         return jsonify({"error": error}), 502
