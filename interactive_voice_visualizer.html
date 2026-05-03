@@ -347,13 +347,19 @@ function handleSpeakResponse(data) {
   const b64      = data.audio_base64;
   const mime     = data.mime_type || "audio/wav";
   const voiceId  = data.voice_id || "default";
+  const errMsg   = data.error;
 
   addLog(`speak: "${text.slice(0, 60)}" (voice: ${voiceId})`);
+
+  if (errMsg) {
+    addLog(`⚠️ Server synthesis error: ${errMsg}`);
+    setStatus(`⚠️ TTS error: ${errMsg}`, "#FFD166");
+  }
 
   audioText.textContent = `"${text}"`;
 
   if (b64) {
-    // Backend-generated audio – decode and play via HTMLAudioElement
+    // Backend-generated audio – use fetch+Blob for efficient decoding
     const dataUrl = `data:${mime};base64,${b64}`;
 
     fetch(dataUrl)
