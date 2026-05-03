@@ -7,6 +7,7 @@ disk unless an explicit ``debug_output_path`` is provided.
 """
 
 import logging
+import os
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ def synthesize_speech(
     text: str,
     voice_settings: dict,
     debug_output_path: Optional[str] = None,
-) -> Tuple[Optional[bytes], str, Optional[str]]:
+) -> Tuple[Optional[bytes], str, Optional[str], str]:
     """Synthesize speech for *text* using *voice_settings*.
 
     Parameters
@@ -37,14 +38,15 @@ def synthesize_speech(
 
     Returns
     -------
-    (audio_bytes, mime_type, error_message)
+    (audio_bytes, mime_type, error_message, effective_text)
         On success ``audio_bytes`` is the raw audio, ``mime_type`` describes the
-        format (e.g. ``"audio/wav"``), and ``error_message`` is ``None``.
+        format (e.g. ``"audio/wav"``), ``error_message`` is ``None``, and
+        ``effective_text`` is the (possibly truncated) text that was synthesized.
         On failure ``audio_bytes`` is ``None`` and ``error_message`` describes
         the problem.
     """
     if not text or not text.strip():
-        return None, "", "Empty text provided"
+        return None, "", "Empty text provided", text
 
     # Sanitize / limit input length
     if len(text) > MAX_TEXT_LENGTH:
@@ -55,14 +57,13 @@ def synthesize_speech(
         from google import genai
         from google.genai import types as genai_types
 
-        client = genai.Client()
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        client = genai.Client(api_key=api_key) if api_key else genai.Client()
 
         voice_id = voice_settings.get("voice_id")
-        speaking_rate = float(voice_settings.get("speaking_rate", 1.0))
-        pitch = float(voice_settings.get("pitch", 0.0))
 
         # Build the speech config
-        if voice_id and voice_id != "default":
+        if voice_id and voice_id not in ("default", ""):
             voice_cfg = genai_types.VoiceConfig(
                 prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
                     voice_name=voice_id
@@ -95,9 +96,8 @@ def synthesize_speech(
                 fh.write(audio_bytes)
             logger.debug("Debug audio written to %s", debug_output_path)
 
-        return audio_bytes, mime_type, None
+        return audio_bytes, mime_type, None, text
 
-    except Exception as exc:  # pragma: no cover – runtime API errors
-        error_msg = f"TTS synthesis failed: {exc}"
-        logger.error(error_msg)
-        return None, "", error_msg
+    except Exception:  # pragma: no cover – runtime API errors
+        logger.exception("TTS synthesis failed")
+        return None, "", "TTS synthesis failed", text

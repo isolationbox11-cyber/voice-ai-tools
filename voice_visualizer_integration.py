@@ -194,24 +194,27 @@ class VoiceVisualizerBridge:
         if CUSTOM_VOICE_ID and "voice_id" not in voice_settings:
             voice_settings = {**voice_settings, "voice_id": CUSTOM_VOICE_ID}
 
-        audio_bytes, mime_type, error = tts_engine.synthesize_speech(text, voice_settings)
+        audio_bytes, mime_type, error, effective_text = await asyncio.to_thread(
+            tts_engine.synthesize_speech, text, voice_settings
+        )
 
         payload: dict = {
             "type": "speak_response",
-            "text": text,
+            # Use the effective (possibly truncated) text so the UI matches audio
+            "text": effective_text,
             "voice_settings": voice_settings,
             "voice_id": voice_settings.get("voice_id", "default"),
         }
 
-        if audio_bytes:
+        if audio_bytes is not None:
             payload["audio_base64"] = base64.b64encode(audio_bytes).decode("ascii")
             payload["mime_type"] = mime_type
-        elif error:
+        if error:
             payload["error"] = error
 
         await self.broadcast_to_visualizers(payload)
 
-        print(f"🗣️ Speaking: {text}")
+        print(f"🗣️ Speaking: {effective_text}")
         print(f"🎛️ Voice settings: {voice_settings}")
     
     async def trigger_glitch_effect(self):
