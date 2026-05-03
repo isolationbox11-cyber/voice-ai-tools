@@ -194,7 +194,9 @@ class VoiceVisualizerBridge:
         if CUSTOM_VOICE_ID and "voice_id" not in voice_settings:
             voice_settings = {**voice_settings, "voice_id": CUSTOM_VOICE_ID}
 
-        audio_bytes, mime_type, error = tts_engine.synthesize_speech(text, voice_settings)
+        audio_bytes, mime_type, error = await asyncio.to_thread(
+            tts_engine.synthesize_speech, text, voice_settings
+        )
 
         payload: dict = {
             "type": "speak_response",
