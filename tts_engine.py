@@ -31,7 +31,10 @@ def synthesize_speech(
     text:
         The text to synthesize.  Truncated to ``MAX_TEXT_LENGTH`` characters.
     voice_settings:
-        Dict with optional keys ``voice_id``, ``speaking_rate``, ``pitch``.
+        Dict with optional key ``voice_id`` (name of the Gemini prebuilt voice
+        to use; defaults to ``"Kore"`` when absent or ``"default"``).
+        Keys ``speaking_rate`` and ``pitch`` are not currently supported by the
+        GenAI TTS API and are ignored if present.
     debug_output_path:
         When provided the raw audio bytes are also written to this path.
         Disabled by default to avoid persisting audio on disk.
