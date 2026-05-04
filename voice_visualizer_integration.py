@@ -31,13 +31,31 @@ except ModuleNotFoundError:
 
 
 def _resolve_voice_settings(call_type: str) -> dict:
-    """Return voice settings for *call_type*, preferring custom voice when available."""
+    """
+    Resolve voice settings for a given call context, preferring custom configuration when available.
+    
+    Parameters:
+        call_type (str): Context identifier used to select voice settings (for example, "SCAM_DETECTED" or "LEGITIMATE").
+    
+    Returns:
+        dict: Voice settings for the provided `call_type`.
+    """
     if _get_custom_voice_settings is not None:
         return _get_custom_voice_settings(call_type)
     return get_voice_for_context(call_type)
 
 class VoiceVisualizerBridge:
     def __init__(self):
+        """
+        Initialize a VoiceVisualizerBridge instance and its runtime state.
+        
+        Sets up attributes used by the bridge:
+        - is_listening: whether simulated voice detection is running.
+        - voice_level: last observed simulated voice level (0–100).
+        - current_status: human-readable status string for UI/state tracking.
+        - websocket_clients: set of connected WebSocket client objects.
+        - voice_trainer: VoiceTrainer instance for potential custom voice training integration.
+        """
         self.is_listening = False
         self.voice_level = 0
         self.current_status = "Ready"
@@ -187,7 +205,15 @@ class VoiceVisualizerBridge:
         await self.log_detection_event("LEGITIMATE", "Verified client call")
     
     async def speak_response(self, text, call_type):
-        """Synthesize speech and broadcast audio + metadata to all visualizers."""
+        """
+        Synthesize speech for the given text using the resolved voice settings and broadcast the resulting audio and metadata to all connected visualizers.
+        
+        The broadcast payload includes the effective text used for synthesis, the resolved `voice_settings` and `voice_id`. If audio was produced, the payload contains `audio_base64` (Base64-encoded bytes) and `mime_type`; if synthesis failed or produced diagnostics, the payload contains an `error` field.
+        
+        Parameters:
+            text (str): The text to be synthesized and spoken.
+            call_type (str): Context identifier used to resolve voice settings (may cause a custom voice ID to be injected when available).
+        """
         voice_settings = _resolve_voice_settings(call_type)
 
         # Inject the custom voice ID when available
