@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice AI Visualizer</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --panel: #12121a;
+      --accent: #4CC9F0;
+      --warn: #F72585;
+      --ok: #06D6A0;
+      --yellow: #FFD166;
+      --purple: #7209B7;
+      --text: #e0e0e0;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+      gap: 20px;
+    }
+
+    h1 {
+      font-size: 1.6rem;
+      letter-spacing: .05em;
+      color: var(--accent);
+    }
+
+    /* ── Connection badge ───────────────────────────────────────────── */
+    #conn-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--panel);
+      border-radius: 999px;
+      padding: 6px 16px;
+      font-size: .85rem;
+    }
+    #conn-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--warn);
+      transition: background .3s;
+    }
+    #conn-dot.connected { background: var(--ok); }
+
+    /* ── Visualizer canvas ──────────────────────────────────────────── */
+    #canvas-wrap {
+      position: relative;
+      width: min(480px, 100%);
+      aspect-ratio: 1;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
+
+    /* ── Status bar ─────────────────────────────────────────────────── */
+    #status-bar {
+      width: min(480px, 100%);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-size: .9rem;
+      min-height: 3em;
+      text-align: center;
+      transition: color .3s;
+    }
+
+    /* ── Voice-level bar ────────────────────────────────────────────── */
+    #level-wrap {
+      width: min(480px, 100%);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    #level-label { font-size: .75rem; color: #888; }
+    #level-track {
+      height: 8px;
+      background: #222;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    #level-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      border-radius: 999px;
+      transition: width .08s linear, background .3s;
+    }
+
+    /* ── Controls ───────────────────────────────────────────────────── */
+    #controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      width: min(480px, 100%);
+    }
+    button {
+      flex: 1 1 130px;
+      padding: 12px;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: .9rem;
+      font-weight: 600;
+      letter-spacing: .03em;
+      transition: opacity .2s, transform .1s;
+    }
+    button:active { transform: scale(.96); }
+    button:disabled { opacity: .4; cursor: not-allowed; }
+    #btn-start   { background: var(--accent);  color: #000; }
+    #btn-stop    { background: var(--yellow);  color: #000; }
+    #btn-scam    { background: var(--warn);    color: #fff; }
+    #btn-legit   { background: var(--ok);      color: #000; }
+
+    /* ── Audio player ───────────────────────────────────────────────── */
+    #audio-section {
+      width: min(480px, 100%);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #audio-section.visible { display: flex; }
+    #audio-label { font-size: .8rem; color: #888; }
+    #audio-text  { font-size: .95rem; font-style: italic; }
+    audio {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    /* ── Log ────────────────────────────────────────────────────────── */
+    #log {
+      width: min(480px, 100%);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      font-size: .78rem;
+      font-family: monospace;
+      color: #888;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    #log .entry { padding: 2px 0; border-bottom: 1px solid #1e1e2a; }
+    #log .entry:last-child { border-bottom: none; }
+
+    /* ── Glitch overlay ─────────────────────────────────────────────── */
+    #glitch-overlay {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 999;
+      opacity: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(247,37,133,.08) 0px,
+        transparent 2px
+      );
+      transition: opacity .05s;
+    }
+    #glitch-overlay.active { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<div id="glitch-overlay"></div>
+
+<h1>🎙️ Voice AI Visualizer</h1>
+
+<div id="conn-badge">
+  <div id="conn-dot"></div>
+  <span id="conn-label">Connecting…</span>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="vis" width="480" height="480"></canvas>
+</div>
+
+<div id="status-bar">Waiting for connection…</div>
+
+<div id="level-wrap">
+  <div id="level-label">VOICE LEVEL</div>
+  <div id="level-track"><div id="level-bar"></div></div>
+</div>
+
+<div id="controls">
+  <button id="btn-start"  disabled>▶ Start Listening</button>
+  <button id="btn-stop"   disabled>⏹ Stop</button>
+  <button id="btn-scam"   disabled>🚨 Test Scam</button>
+  <button id="btn-legit"  disabled>✅ Test Legit</button>
+</div>
+
+<div id="audio-section">
+  <div id="audio-label">SYNTHESIZED SPEECH</div>
+  <div id="audio-text"></div>
+  <audio id="audio-player" controls></audio>
+</div>
+
+<div id="log"></div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────
+   Configuration
+──────────────────────────────────────────────────────────────── */
+const WS_URL   = "ws://localhost:8765";
+const MAX_LOG  = 80;
+
+/* ────────────────────────────────────────────────────────────────
+   DOM refs
+──────────────────────────────────────────────────────────────── */
+const connDot      = document.getElementById("conn-dot");
+const connLabel    = document.getElementById("conn-label");
+const statusBar    = document.getElementById("status-bar");
+const levelBar     = document.getElementById("level-bar");
+const canvas       = document.getElementById("vis");
+const ctx          = canvas.getContext("2d");
+const audioSection = document.getElementById("audio-section");
+const audioText    = document.getElementById("audio-text");
+const audioPlayer  = document.getElementById("audio-player");
+const glitch       = document.getElementById("glitch-overlay");
+const logEl        = document.getElementById("log");
+const btnStart     = document.getElementById("btn-start");
+const btnStop      = document.getElementById("btn-stop");
+const btnScam      = document.getElementById("btn-scam");
+const btnLegit     = document.getElementById("btn-legit");
+
+/* ────────────────────────────────────────────────────────────────
+   State
+──────────────────────────────────────────────────────────────── */
+let ws          = null;
+let voiceLevel  = 0;
+let animId      = null;
+
+/* ────────────────────────────────────────────────────────────────
+   Logging
+──────────────────────────────────────────────────────────────── */
+function addLog(msg) {
+  const ts   = new Date().toLocaleTimeString();
+  const div  = document.createElement("div");
+  div.className = "entry";
+  div.textContent = `[${ts}] ${msg}`;
+  logEl.prepend(div);
+  // Trim
+  while (logEl.children.length > MAX_LOG) {
+    logEl.removeChild(logEl.lastChild);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   WebSocket
+──────────────────────────────────────────────────────────────── */
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.addEventListener("open", () => {
+    connDot.classList.add("connected");
+    connLabel.textContent = "Connected";
+    setStatus("🟢 Connected to server", "#06D6A0");
+    [btnStart, btnStop, btnScam, btnLegit].forEach(b => b.disabled = false);
+    addLog("WebSocket connected");
+  });
+
+  ws.addEventListener("close", () => {
+    connDot.classList.remove("connected");
+    connLabel.textContent = "Disconnected – retrying…";
+    setStatus("🔴 Disconnected – retrying in 3 s…", "#F72585");
+    [btnStart, btnStop, btnScam, btnLegit].forEach(b => b.disabled = true);
+    addLog("WebSocket disconnected");
+    setTimeout(connect, 3000);
+  });
+
+  ws.addEventListener("error", (e) => {
+    addLog(`WebSocket error: ${e.type}`);
+  });
+
+  ws.addEventListener("message", (event) => {
+    let data;
+    try { data = JSON.parse(event.data); }
+    catch { addLog("Malformed message received"); return; }
+    handleMessage(data);
+  });
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Message handler
+──────────────────────────────────────────────────────────────── */
+function handleMessage(data) {
+  switch (data.type) {
+
+    case "status_update":
+      setStatus(data.message, data.color);
+      addLog(`status: ${data.message}`);
+      break;
+
+    case "voice_level_update":
+      voiceLevel = data.level;
+      updateLevelBar(voiceLevel);
+      break;
+
+    case "trigger_alert":
+      triggerAlert(data.alert_type);
+      break;
+
+    case "trigger_glitch":
+      triggerGlitch();
+      break;
+
+    case "speak_response":
+      handleSpeakResponse(data);
+      break;
+
+    default:
+      addLog(`unknown event: ${data.type}`);
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
+   speak_response – play backend-synthesized audio
+──────────────────────────────────────────────────────────────── */
+function handleSpeakResponse(data) {
+  const text     = data.text     || "";
+  const b64      = data.audio_base64;
+  const mime     = data.mime_type || "audio/wav";
+  const voiceId  = data.voice_id || "default";
+  const errMsg   = data.error;
+
+  addLog(`speak: "${text.slice(0, 60)}" (voice: ${voiceId})`);
+
+  if (errMsg) {
+    addLog(`⚠️ Server synthesis error: ${errMsg}`);
+    setStatus(`⚠️ TTS error: ${errMsg}`, "#FFD166");
+  }
+
+  audioText.textContent = `"${text}"`;
+
+  if (b64) {
+    // Backend-generated audio – use fetch+Blob for efficient decoding
+    const dataUrl = `data:${mime};base64,${b64}`;
+
+    fetch(dataUrl)
+      .then(response => response.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+
+        // Revoke old object URL to avoid leaks
+        if (audioPlayer.src && audioPlayer.src.startsWith("blob:")) {
+          URL.revokeObjectURL(audioPlayer.src);
+        }
+        audioPlayer.src = url;
+        audioSection.classList.add("visible");
+        return audioPlayer.play().catch(err => {
+          addLog(`Audio play blocked: ${err.message} (user gesture required)`);
+        });
+      })
+      .catch(err => {
+        addLog(`Audio decode/play error: ${err.message}`);
+        fallbackSpeech(text);
+      });
+  } else {
+    // Fallback: browser speechSynthesis when no audio payload
+    addLog("No audio_base64 – falling back to speechSynthesis");
+    audioSection.classList.remove("visible");
+    fallbackSpeech(text);
+  }
+}
+
+function fallbackSpeech(text) {
+  if (!("speechSynthesis" in window)) return;
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.rate  = 1.0;
+  utt.pitch = 1.0;
+  window.speechSynthesis.speak(utt);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   UI helpers
+──────────────────────────────────────────────────────────────── */
+function setStatus(msg, color) {
+  statusBar.textContent  = msg;
+  statusBar.style.color  = color || "var(--text)";
+}
+
+function updateLevelBar(level) {
+  levelBar.style.width = `${level}%`;
+  if (level > 75)      levelBar.style.background = "var(--warn)";
+  else if (level > 45) levelBar.style.background = "var(--yellow)";
+  else                 levelBar.style.background = "var(--accent)";
+}
+
+function triggerAlert(alertType) {
+  const color = alertType === "scam" ? "var(--warn)" : "var(--ok)";
+  canvas.style.boxShadow = `0 0 32px ${color}`;
+  setTimeout(() => { canvas.style.boxShadow = ""; }, 1500);
+}
+
+function triggerGlitch() {
+  glitch.classList.add("active");
+  setTimeout(() => glitch.classList.remove("active"), 150);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Canvas visualizer (radial waveform)
+──────────────────────────────────────────────────────────────── */
+function drawFrame() {
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2, cy = H / 2;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const now  = performance.now() / 1000;
+  const bars = 64;
+  const r0   = 80 + voiceLevel * 0.4;
+
+  for (let i = 0; i < bars; i++) {
+    const angle  = (i / bars) * Math.PI * 2 - Math.PI / 2;
+    const wave   = Math.sin(now * 4 + i * 0.4) * voiceLevel * 0.5;
+    const len    = 20 + wave + voiceLevel * 0.3;
+    const x1 = cx + Math.cos(angle) * r0;
+    const y1 = cy + Math.sin(angle) * r0;
+    const x2 = cx + Math.cos(angle) * (r0 + len);
+    const y2 = cy + Math.sin(angle) * (r0 + len);
+
+    const alpha = 0.4 + (voiceLevel / 100) * 0.6;
+    ctx.strokeStyle = `rgba(76,201,240,${alpha})`;
+    ctx.lineWidth   = 2;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+
+  // Centre circle
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r0);
+  grad.addColorStop(0, `rgba(76,201,240,${0.1 + voiceLevel * 0.003})`);
+  grad.addColorStop(1, "rgba(76,201,240,0)");
+  ctx.beginPath();
+  ctx.arc(cx, cy, r0, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  animId = requestAnimationFrame(drawFrame);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Button handlers
+──────────────────────────────────────────────────────────────── */
+btnStart.addEventListener("click", () => send({ type: "start_listening" }));
+btnStop.addEventListener( "click", () => send({ type: "stop_listening"  }));
+btnScam.addEventListener( "click", () => send({ type: "test_scam"       }));
+btnLegit.addEventListener("click", () => send({ type: "test_legitimate" }));
+
+/* ────────────────────────────────────────────────────────────────
+   Boot
+──────────────────────────────────────────────────────────────── */
+connect();
+drawFrame();
+</script>
+</body>
+</html>
