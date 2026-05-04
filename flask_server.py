@@ -95,10 +95,9 @@ def health():
 @limiter.limit("30 per minute")
 def tts():
     """
-    Synthesize TTS and return raw audio bytes.
-
-    Request JSON: { "text": string, "call_type": string }
-    Response: audio/* bytes on success, JSON error on failure.
+    Synthesize provided text into audio and return raw audio bytes.
+    
+    Expects a JSON body with "text" (string) and an optional "call_type" (string). On success returns a Flask Response containing raw audio bytes with the appropriate MIME type. On failure returns JSON {"error": <message>} with an HTTP status code: 401 for unauthorized requests, 400 for invalid JSON or text validation errors (missing/empty text or text exceeding MAX_TEXT_LENGTH), and 502 if the underlying synthesis service reports an error.
     """
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
