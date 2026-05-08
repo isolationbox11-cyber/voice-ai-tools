@@ -1,302 +1,356 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Voice AI Visualizer</title>
-  <style>
-    :root {
-      --bg: #0a0a0f;
-      --panel: #12121a;
-      --accent: #4CC9F0;
-      --warn: #F72585;
-      --ok: #06D6A0;
-      --yellow: #FFD166;
-      --purple: #7209B7;
-      --text: #e0e0e0;
-      --radius: 12px;
-    }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice</title>
+<style>
+:root {
+  --bg: #0b1a15;
+  --panel: rgba(18,26,30,0.85);
+  --accent: #4CC9F0;
+  --warn: #F72585;
+  --ok: #06D6A0;
+  --warm: #FF9B4D;
+  --deep-teal: #0f3d3e;
+  --text: #e0e0e0;
+  --glow: 0 0 40px rgba(76,201,240,0.3);
+}
 
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: "Segoe UI", system-ui, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 24px 16px;
-      gap: 20px;
-    }
+body {
+  background: radial-gradient(ellipse at 20% 30%, #1a4747 0%, transparent 50%),
+              radial-gradient(ellipse at 80% 70%, #2a1a47 0%, transparent 50%),
+              radial-gradient(ellipse at 50% 50%, #0b1a15 0%, #051010 100%);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: hidden;
+  position: relative;
+}
 
-    h1 {
-      font-size: 1.6rem;
-      letter-spacing: .05em;
-      color: var(--accent);
-    }
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(40px);
+  opacity: 0.15;
+  animation: float 20s ease-in-out infinite;
+}
+.blob.one { width: 300px; height: 300px; background: #4CC9F0; top: 10%; left: 10%; animation-delay: 0s; }
+.blob.two { width: 200px; height: 200px; background: #F72585; top: 60%; right: 15%; animation-delay: -5s; }
+.blob.three { width: 180px; height: 180px; background: #FF9B4D; bottom: 20%; left: 25%; animation-delay: -10s; }
 
-    /* ── Connection badge ───────────────────────────────────────────── */
-    #conn-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      background: var(--panel);
-      border-radius: 999px;
-      padding: 6px 16px;
-      font-size: .85rem;
-    }
-    #conn-dot {
-      width: 10px; height: 10px;
-      border-radius: 50%;
-      background: var(--warn);
-      transition: background .3s;
-    }
-    #conn-dot.connected { background: var(--ok); }
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -40px) scale(1.05); }
+  50% { transform: translate(-20px, 20px) scale(0.95); }
+  75% { transform: translate(10px, -10px) scale(1.02); }
+}
 
-    /* ── Visualizer canvas ──────────────────────────────────────────── */
-    #canvas-wrap {
-      position: relative;
-      width: min(480px, 100%);
-      aspect-ratio: 1;
-    }
-    canvas {
-      width: 100%;
-      height: 100%;
-      border-radius: var(--radius);
-      background: var(--panel);
-    }
+.eye {
+  position: absolute;
+  background: #e0e0e0;
+  border-radius: 50%;
+  animation: blink 4s ease-in-out infinite;
+}
+.eye::after {
+  content: "";
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 40%; height: 40%;
+  background: #0b1a15;
+  border-radius: 50%;
+}
+.eye.one { width: 24px; height: 24px; top: 20%; left: 70%; animation-delay: 0s; }
+.eye.two { width: 18px; height: 18px; top: 55%; left: 80%; animation-delay: -2s; }
+.eye.three { width: 14px; height: 14px; top: 80%; left: 20%; animation-delay: -1s; }
+.eye.four { width: 20px; height: 20px; bottom: 15%; right: 30%; animation-delay: -3s; }
 
-    /* ── Status bar ─────────────────────────────────────────────────── */
-    #status-bar {
-      width: min(480px, 100%);
-      background: var(--panel);
-      border-radius: var(--radius);
-      padding: 12px 16px;
-      font-size: .9rem;
-      min-height: 3em;
-      text-align: center;
-      transition: color .3s;
-    }
+@keyframes blink {
+  0%, 90%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
 
-    /* ── Voice-level bar ────────────────────────────────────────────── */
-    #level-wrap {
-      width: min(480px, 100%);
-      background: var(--panel);
-      border-radius: var(--radius);
-      padding: 12px 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-    #level-label { font-size: .75rem; color: #888; }
-    #level-track {
-      height: 8px;
-      background: #222;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    #level-bar {
-      height: 100%;
-      width: 0%;
-      background: var(--accent);
-      border-radius: 999px;
-      transition: width .08s linear, background .3s;
-    }
+header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 30px 20px 0;
+  z-index: 10;
+}
 
-    /* ── Controls ───────────────────────────────────────────────────── */
-    #controls {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      justify-content: center;
-      width: min(480px, 100%);
-    }
-    button {
-      flex: 1 1 130px;
-      padding: 12px;
-      border: none;
-      border-radius: var(--radius);
-      cursor: pointer;
-      font-size: .9rem;
-      font-weight: 600;
-      letter-spacing: .03em;
-      transition: opacity .2s, transform .1s;
-    }
-    button:active { transform: scale(.96); }
-    button:disabled { opacity: .4; cursor: not-allowed; }
-    #btn-start   { background: var(--accent);  color: #000; }
-    #btn-stop    { background: var(--yellow);  color: #000; }
-    #btn-scam    { background: var(--warn);    color: #fff; }
-    #btn-legit   { background: var(--ok);      color: #000; }
+h1 {
+  font-size: 2rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: var(--glow);
+  opacity: 0.9;
+}
 
-    /* ── Audio player ───────────────────────────────────────────────── */
-    #audio-section {
-      width: min(480px, 100%);
-      background: var(--panel);
-      border-radius: var(--radius);
-      padding: 14px 16px;
-      display: none;
-      flex-direction: column;
-      gap: 8px;
-    }
-    #audio-section.visible { display: flex; }
-    #audio-label { font-size: .8rem; color: #888; }
-    #audio-text  { font-size: .95rem; font-style: italic; }
-    audio {
-      width: 100%;
-      accent-color: var(--accent);
-    }
+#conn-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  border: 1px solid rgba(76,201,240,0.3);
+  border-radius: 999px;
+  background: rgba(11,26,21,0.7);
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
 
-    /* ── Log ────────────────────────────────────────────────────────── */
-    #log {
-      width: min(480px, 100%);
-      background: var(--panel);
-      border-radius: var(--radius);
-      padding: 12px 16px;
-      font-size: .78rem;
-      font-family: monospace;
-      color: #888;
-      max-height: 180px;
-      overflow-y: auto;
-    }
-    #log .entry { padding: 2px 0; border-bottom: 1px solid #1e1e2a; }
-    #log .entry:last-child { border-bottom: none; }
+#conn-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #F72585;
+  box-shadow: 0 0 8px rgba(247,37,133,0.8);
+  transition: all 0.3s ease;
+}
+#conn-dot.connected {
+  background: var(--ok);
+  box-shadow: 0 0 12px rgba(6,214,160,0.8);
+}
 
-    /* ── Glitch overlay ─────────────────────────────────────────────── */
-    #glitch-overlay {
-      position: fixed; inset: 0;
-      pointer-events: none;
-      z-index: 999;
-      opacity: 0;
-      background: repeating-linear-gradient(
-        0deg,
-        rgba(247,37,133,.08) 0px,
-        transparent 2px
-      );
-      transition: opacity .05s;
-    }
-    #glitch-overlay.active { opacity: 1; }
-  </style>
+#visualizer-canvas {
+  flex: 1;
+  width: 100%;
+  max-width: 600px;
+  min-height: 300px;
+  margin: 20px 0;
+}
+
+#status-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 20px 20px;
+  z-index: 10;
+  width: 100%;
+  max-width: 600px;
+}
+
+#status-msg {
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-align: center;
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+#status-msg.scam { color: var(--warn); text-shadow: 0 0 20px var(--warn); }
+#status-msg.ok { color: var(--ok); text-shadow: 0 0 20px var(--ok); }
+#status-msg.demo { color: #7209B7; text-shadow: 0 0 20px #7209B7; }
+
+#voice-bar-container {
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+}
+#voice-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), var(--ok));
+  transition: width 0.1s ease-out;
+  box-shadow: 0 0 20px var(--accent);
+}
+
+#controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 20px 30px;
+  z-index: 10;
+}
+
+button {
+  padding: 12px 24px;
+  border: 1px solid rgba(76,201,240,0.3);
+  border-radius: 8px;
+  background: rgba(11,26,21,0.8);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+button:hover {
+  background: rgba(76,201,240,0.15);
+  box-shadow: var(--glow);
+  border-color: var(--accent);
+}
+button:active { transform: scale(0.97); }
+button#btn-scam:hover { border-color: var(--warn); background: rgba(247,37,133,0.15); }
+button#btn-legit:hover { border-color: var(--ok); background: rgba(6,214,160,0.15); }
+
+/* Glitch effect */
+#visualizer-canvas.glitch {
+  animation: glitch-anim 0.3s ease-in-out;
+}
+@keyframes glitch-anim {
+  0%, 100% { transform: translate(0); filter: hue-rotate(0deg); }
+  20% { transform: translate(-5px, 2px); filter: hue-rotate(20deg); }
+  40% { transform: translate(5px, -2px); filter: hue-rotate(-20deg); }
+  60% { transform: translate(-3px, 1px); filter: hue-rotate(10deg); }
+  80% { transform: translate(3px, -1px); filter: hue-rotate(-10deg); }
+}
+
+.audio-visible { display: block; }
+</style>
 </head>
 <body>
 
-<div id="glitch-overlay"></div>
+<div class="blob one"></div>
+<div class="blob two"></div>
+<div class="blob three"></div>
+<div class="eye one"></div>
+<div class="eye two"></div>
+<div class="eye three"></div>
+<div class="eye four"></div>
 
-<h1>🎙️ Voice AI Visualizer</h1>
+<header>
+  <h1>Voice</h1>
+  <div id="conn-badge">
+    <div id="conn-dot"></div>
+    <span id="conn-label">Disconnected</span>
+  </div>
+</header>
 
-<div id="conn-badge">
-  <div id="conn-dot"></div>
-  <span id="conn-label">Connecting…</span>
-</div>
+<canvas id="visualizer-canvas"></canvas>
 
-<div id="canvas-wrap">
-  <canvas id="vis" width="480" height="480"></canvas>
-</div>
-
-<div id="status-bar">Waiting for connection…</div>
-
-<div id="level-wrap">
-  <div id="level-label">VOICE LEVEL</div>
-  <div id="level-track"><div id="level-bar"></div></div>
+<div id="status-bar">
+  <div id="status-msg">Initializing...</div>
+  <div id="voice-bar-container">
+    <div id="voice-bar"></div>
+  </div>
 </div>
 
 <div id="controls">
-  <button id="btn-start"  disabled>▶ Start Listening</button>
-  <button id="btn-stop"   disabled>⏹ Stop</button>
-  <button id="btn-scam"   disabled>🚨 Test Scam</button>
-  <button id="btn-legit"  disabled>✅ Test Legit</button>
+  <button id="btn-start">Start</button>
+  <button id="btn-stop">Stop</button>
+  <button id="btn-scam">Scam</button>
+  <button id="btn-legit">Legitimate</button>
 </div>
 
-<div id="audio-section">
-  <div id="audio-label">SYNTHESIZED SPEECH</div>
-  <div id="audio-text"></div>
-  <audio id="audio-player" controls></audio>
-</div>
-
-<div id="log"></div>
+<audio id="audio-player" class="audio-visible" style="width: 100%; max-width: 600px; margin: 0 0 20px;"></audio>
 
 <script>
-/* ────────────────────────────────────────────────────────────────
-   Configuration
-──────────────────────────────────────────────────────────────── */
-const WS_URL   = "ws://localhost:8765";
-const MAX_LOG  = 80;
+const WS_URL = "ws://localhost:8765";
+const canvas = document.getElementById("visualizer-canvas");
+const ctx = canvas.getContext("2d");
+let ws = null;
+let voiceLevel = 0;
+let animId = null;
 
-/* ────────────────────────────────────────────────────────────────
-   DOM refs
-──────────────────────────────────────────────────────────────── */
-const connDot      = document.getElementById("conn-dot");
-const connLabel    = document.getElementById("conn-label");
-const statusBar    = document.getElementById("status-bar");
-const levelBar     = document.getElementById("level-bar");
-const canvas       = document.getElementById("vis");
-const ctx          = canvas.getContext("2d");
-const audioSection = document.getElementById("audio-section");
-const audioText    = document.getElementById("audio-text");
-const audioPlayer  = document.getElementById("audio-player");
-const glitch       = document.getElementById("glitch-overlay");
-const logEl        = document.getElementById("log");
-const btnStart     = document.getElementById("btn-start");
-const btnStop      = document.getElementById("btn-stop");
-const btnScam      = document.getElementById("btn-scam");
-const btnLegit     = document.getElementById("btn-legit");
+function resizeCanvas() {
+  canvas.width = canvas.offsetWidth;
+  canvas.height = Math.max(300, canvas.offsetHeight);
+}
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
 
-/* ────────────────────────────────────────────────────────────────
-   State
-──────────────────────────────────────────────────────────────── */
-let ws          = null;
-let voiceLevel  = 0;
-let animId      = null;
+function drawFrame() {
+  const w = canvas.width, h = canvas.height;
+  const cx = w / 2, cy = h / 2;
+  ctx.clearRect(0, 0, w, h);
 
-/* ────────────────────────────────────────────────────────────────
-   Logging
-──────────────────────────────────────────────────────────────── */
-function addLog(msg) {
-  const ts   = new Date().toLocaleTimeString();
-  const div  = document.createElement("div");
-  div.className = "entry";
-  div.textContent = `[${ts}] ${msg}`;
-  logEl.prepend(div);
-  // Trim
-  while (logEl.children.length > MAX_LOG) {
-    logEl.removeChild(logEl.lastChild);
-  }
+  // Outer ring (subtle)
+  ctx.beginPath();
+  ctx.arc(cx, cy, 140, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(76,201,240,0.08)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Middle ring (subtle)
+  ctx.beginPath();
+  ctx.arc(cx, cy, 100, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(76,201,240,0.12)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Centre circle (voice-reactive)
+  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 80);
+  grad.addColorStop(0, `rgba(76,201,240,${0.1 + voiceLevel * 0.003})`);
+  grad.addColorStop(1, "rgba(76,201,240,0)");
+  ctx.beginPath();
+  ctx.arc(cx, cy, 80, 0, Math.PI * 2);
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Centre dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, 6 + voiceLevel * 0.1, 0, Math.PI * 2);
+  ctx.fillStyle = `rgba(76,201,240,${0.3 + voiceLevel * 0.002})`;
+  ctx.shadowColor = "rgba(76,201,240,0.6)";
+  ctx.shadowBlur = 20 + voiceLevel * 0.5;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  animId = requestAnimationFrame(drawFrame);
 }
 
-/* ────────────────────────────────────────────────────────────────
-   WebSocket
-──────────────────────────────────────────────────────────────── */
+/* Button handlers */
 function connect() {
   ws = new WebSocket(WS_URL);
-
   ws.addEventListener("open", () => {
-    connDot.classList.add("connected");
-    connLabel.textContent = "Connected";
-    setStatus("🟢 Connected to server", "#06D6A0");
-    [btnStart, btnStop, btnScam, btnLegit].forEach(b => b.disabled = false);
-    addLog("WebSocket connected");
+    document.getElementById("conn-dot").classList.add("connected");
+    document.getElementById("conn-label").textContent = "Connected";
   });
-
   ws.addEventListener("close", () => {
-    connDot.classList.remove("connected");
-    connLabel.textContent = "Disconnected – retrying…";
-    setStatus("🔴 Disconnected – retrying in 3 s…", "#F72585");
-    [btnStart, btnStop, btnScam, btnLegit].forEach(b => b.disabled = true);
-    addLog("WebSocket disconnected");
-    setTimeout(connect, 3000);
+    document.getElementById("conn-dot").classList.remove("connected");
+    document.getElementById("conn-label").textContent = "Disconnected";
+    setTimeout(connect, 2000);
   });
-
-  ws.addEventListener("error", (e) => {
-    addLog(`WebSocket error: ${e.type}`);
-  });
-
-  ws.addEventListener("message", (event) => {
+  ws.addEventListener("message", (e) => {
     let data;
-    try { data = JSON.parse(event.data); }
-    catch { addLog("Malformed message received"); return; }
-    handleMessage(data);
+    try { data = JSON.parse(e.data); } catch { return; }
+
+    switch (data.type) {
+      case "voice_level_update":
+        voiceLevel = data.level;
+        document.getElementById("voice-bar").style.width = voiceLevel + "%";
+        if (voiceLevel > 70) {
+          canvas.classList.add("glitch");
+          setTimeout(() => canvas.classList.remove("glitch"), 300);
+        }
+        break;
+      case "status_update":
+        document.getElementById("status-msg").textContent = data.message;
+        document.getElementById("status-msg").style.color = data.color;
+        break;
+      case "speak_response":
+        if (data.audio_base64) {
+          const dataUrl = `data:${data.mime_type};base64,${data.audio_base64}`;
+          const player = document.getElementById("audio-player");
+          player.src = dataUrl;
+          player.play();
+        }
+        break;
+      case "trigger_alert":
+        if (data.alert_type === "scam") {
+          document.getElementById("status-msg").classList.add("scam");
+          setTimeout(() => document.getElementById("status-msg").classList.remove("scam"), 3000);
+        } else if (data.alert_type === "legitimate") {
+          document.getElementById("status-msg").classList.add("ok");
+          setTimeout(() => document.getElementById("status-msg").classList.remove("ok"), 3000);
+        }
+        break;
+      case "trigger_glitch":
+        canvas.classList.add("glitch");
+        setTimeout(() => canvas.classList.remove("glitch"), 400);
+        break;
+    }
   });
 }
 
@@ -306,179 +360,14 @@ function send(obj) {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Message handler
-──────────────────────────────────────────────────────────────── */
-function handleMessage(data) {
-  switch (data.type) {
+document.getElementById("btn-start").addEventListener("click", () => send({ type: "start_listening" }));
+document.getElementById("btn-stop").addEventListener("click", () => send({ type: "stop_listening" }));
+document.getElementById("btn-scam").addEventListener("click", () => send({ type: "test_scam" }));
+document.getElementById("btn-legit").addEventListener("click", () => send({ type: "test_legitimate" }));
 
-    case "status_update":
-      setStatus(data.message, data.color);
-      addLog(`status: ${data.message}`);
-      break;
-
-    case "voice_level_update":
-      voiceLevel = data.level;
-      updateLevelBar(voiceLevel);
-      break;
-
-    case "trigger_alert":
-      triggerAlert(data.alert_type);
-      break;
-
-    case "trigger_glitch":
-      triggerGlitch();
-      break;
-
-    case "speak_response":
-      handleSpeakResponse(data);
-      break;
-
-    default:
-      addLog(`unknown event: ${data.type}`);
-  }
-}
-
-/* ────────────────────────────────────────────────────────────────
-   speak_response – play backend-synthesized audio
-──────────────────────────────────────────────────────────────── */
-function handleSpeakResponse(data) {
-  const text     = data.text     || "";
-  const b64      = data.audio_base64;
-  const mime     = data.mime_type || "audio/wav";
-  const voiceId  = data.voice_id || "default";
-  const errMsg   = data.error;
-
-  addLog(`speak: "${text.slice(0, 60)}" (voice: ${voiceId})`);
-
-  if (errMsg) {
-    addLog(`⚠️ Server synthesis error: ${errMsg}`);
-    setStatus(`⚠️ TTS error: ${errMsg}`, "#FFD166");
-  }
-
-  audioText.textContent = `"${text}"`;
-
-  if (b64) {
-    // Backend-generated audio – use fetch+Blob for efficient decoding
-    const dataUrl = `data:${mime};base64,${b64}`;
-
-    fetch(dataUrl)
-      .then(response => response.blob())
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-
-        // Revoke old object URL to avoid leaks
-        if (audioPlayer.src && audioPlayer.src.startsWith("blob:")) {
-          URL.revokeObjectURL(audioPlayer.src);
-        }
-        audioPlayer.src = url;
-        audioSection.classList.add("visible");
-        return audioPlayer.play().catch(err => {
-          addLog(`Audio play blocked: ${err.message} (user gesture required)`);
-        });
-      })
-      .catch(err => {
-        addLog(`Audio decode/play error: ${err.message}`);
-        fallbackSpeech(text);
-      });
-  } else {
-    // Fallback: browser speechSynthesis when no audio payload
-    addLog("No audio_base64 – falling back to speechSynthesis");
-    audioSection.classList.remove("visible");
-    fallbackSpeech(text);
-  }
-}
-
-function fallbackSpeech(text) {
-  if (!("speechSynthesis" in window)) return;
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.rate  = 1.0;
-  utt.pitch = 1.0;
-  window.speechSynthesis.speak(utt);
-}
-
-/* ────────────────────────────────────────────────────────────────
-   UI helpers
-──────────────────────────────────────────────────────────────── */
-function setStatus(msg, color) {
-  statusBar.textContent  = msg;
-  statusBar.style.color  = color || "var(--text)";
-}
-
-function updateLevelBar(level) {
-  levelBar.style.width = `${level}%`;
-  if (level > 75)      levelBar.style.background = "var(--warn)";
-  else if (level > 45) levelBar.style.background = "var(--yellow)";
-  else                 levelBar.style.background = "var(--accent)";
-}
-
-function triggerAlert(alertType) {
-  const color = alertType === "scam" ? "var(--warn)" : "var(--ok)";
-  canvas.style.boxShadow = `0 0 32px ${color}`;
-  setTimeout(() => { canvas.style.boxShadow = ""; }, 1500);
-}
-
-function triggerGlitch() {
-  glitch.classList.add("active");
-  setTimeout(() => glitch.classList.remove("active"), 150);
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Canvas visualizer (radial waveform)
-──────────────────────────────────────────────────────────────── */
-function drawFrame() {
-  const W = canvas.width, H = canvas.height;
-  const cx = W / 2, cy = H / 2;
-
-  ctx.clearRect(0, 0, W, H);
-
-  const now  = performance.now() / 1000;
-  const bars = 64;
-  const r0   = 80 + voiceLevel * 0.4;
-
-  for (let i = 0; i < bars; i++) {
-    const angle  = (i / bars) * Math.PI * 2 - Math.PI / 2;
-    const wave   = Math.sin(now * 4 + i * 0.4) * voiceLevel * 0.5;
-    const len    = 20 + wave + voiceLevel * 0.3;
-    const x1 = cx + Math.cos(angle) * r0;
-    const y1 = cy + Math.sin(angle) * r0;
-    const x2 = cx + Math.cos(angle) * (r0 + len);
-    const y2 = cy + Math.sin(angle) * (r0 + len);
-
-    const alpha = 0.4 + (voiceLevel / 100) * 0.6;
-    ctx.strokeStyle = `rgba(76,201,240,${alpha})`;
-    ctx.lineWidth   = 2;
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
-  }
-
-  // Centre circle
-  const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r0);
-  grad.addColorStop(0, `rgba(76,201,240,${0.1 + voiceLevel * 0.003})`);
-  grad.addColorStop(1, "rgba(76,201,240,0)");
-  ctx.beginPath();
-  ctx.arc(cx, cy, r0, 0, Math.PI * 2);
-  ctx.fillStyle = grad;
-  ctx.fill();
-
-  animId = requestAnimationFrame(drawFrame);
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Button handlers
-──────────────────────────────────────────────────────────────── */
-btnStart.addEventListener("click", () => send({ type: "start_listening" }));
-btnStop.addEventListener( "click", () => send({ type: "stop_listening"  }));
-btnScam.addEventListener( "click", () => send({ type: "test_scam"       }));
-btnLegit.addEventListener("click", () => send({ type: "test_legitimate" }));
-
-/* ────────────────────────────────────────────────────────────────
-   Boot
-──────────────────────────────────────────────────────────────── */
 connect();
 drawFrame();
 </script>
+
 </body>
 </html>
