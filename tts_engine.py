@@ -18,6 +18,20 @@ MAX_TEXT_LENGTH = 1000
 # Default TTS model exposed by the Gemini API
 _TTS_MODEL = "gemini-2.5-flash-preview-tts"
 
+# Module-level client cache.  The client is created once on first use so that
+# repeated /tts calls do not pay the constructor overhead each time.
+_genai_client = None
+
+
+def _get_client():
+    """Return a cached ``genai.Client``, creating it on the first call."""
+    global _genai_client
+    if _genai_client is None:
+        from google import genai  # imported here so the module loads without google-genai
+        api_key = os.environ.get("GOOGLE_API_KEY")
+        _genai_client = genai.Client(api_key=api_key) if api_key else genai.Client()
+    return _genai_client
+
 
 def synthesize_speech(
     text: str,
@@ -33,8 +47,9 @@ def synthesize_speech(
     voice_settings:
         Dict with optional key ``voice_id`` (name of the Gemini prebuilt voice
         to use; defaults to ``"Kore"`` when absent or ``"default"``).
-        Keys ``speaking_rate`` and ``pitch`` are not currently supported by the
-        GenAI TTS API and are ignored if present.
+        Additional keys such as ``speaking_rate``, ``pitch``, and ``emotion``
+        are accepted but not currently forwarded to the Gemini API (the API
+        does not expose those controls via the content-generation endpoint).
     debug_output_path:
         When provided the raw audio bytes are also written to this path.
         Disabled by default to avoid persisting audio on disk.
@@ -57,11 +72,9 @@ def synthesize_speech(
         text = text[:MAX_TEXT_LENGTH]
 
     try:
-        from google import genai
         from google.genai import types as genai_types
 
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        client = genai.Client(api_key=api_key) if api_key else genai.Client()
+        client = _get_client()
 
         voice_id = voice_settings.get("voice_id")
 

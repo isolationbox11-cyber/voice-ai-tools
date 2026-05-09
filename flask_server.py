@@ -4,14 +4,16 @@ Voice AI Tools - Flask Backend
 Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status
 
 Env vars:
-  GOOGLE_API_KEY      - Gemini API key (for TTS)
-  VOICE_SERVER_TOKEN  - shared secret (X-Token header)
-  SHODAN_API_KEY      - Shodan API key (optional)
-  ALLOWED_ORIGINS     - comma-separated extra CORS origins
-  HOST / PORT         - bind address (default 127.0.0.1:5000)
+  GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
+  VOICE_SERVER_TOKEN    - shared secret (X-Token header) [required]
+  SHODAN_API_KEY        - Shodan API key (optional)
+  ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. extension IDs)
+  PORT                  - bind port (default 5000)
+  ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST (unsafe; logs a warning)
+  HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-import os, io, re, json, time, wave, tempfile, importlib
+import os, io, re, json, time, wave, tempfile, importlib, sys
 from pathlib import Path
 from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
@@ -36,10 +38,13 @@ except ImportError:
 
 try:
     from tts_engine import synthesize_speech
-    from voice_config import get_voice_for_context
 except ImportError:
     synthesize_speech = None
-    get_voice_for_context = None
+
+try:
+    from voice_config import get_voice_for_context as _default_voice_fn
+except ImportError:
+    _default_voice_fn = None
 
 # ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
@@ -52,22 +57,82 @@ SAMPLES_DIR        = Path("voice_samples")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
+# ── token guard ───────────────────────────────────────────────────────
+# Require a token for all protected endpoints.  An empty token is treated as
+# "not configured" and every request is rejected with 401 so the server is
+# secure by default.
+if not VOICE_SERVER_TOKEN:
+    print(
+        "WARNING: VOICE_SERVER_TOKEN is not set.  All requests to protected "
+        "endpoints will be rejected with HTTP 401.  Set the env var before "
+        "starting the server:\n"
+        "  export VOICE_SERVER_TOKEN='choose-a-strong-random-secret'",
+        file=sys.stderr,
+    )
+
+# ── CORS ──────────────────────────────────────────────────────────────
+# Exact localhost origins only.  No wildcard patterns, no "null" origin.
+# Users who need to allow a specific Chrome extension can add its origin
+# (e.g. "chrome-extension://abcdef...") via the ALLOWED_ORIGINS env var.
 _extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-ALLOWED_ORIGINS = ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"] + _extra_origins
+ALLOWED_ORIGINS = [
+    "http://127.0.0.1:5000",
+    "http://localhost:5000",
+] + _extra_origins
 
 app = Flask(__name__)
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
 # ── auth ──────────────────────────────────────────────────────────────
-def _check_token():
+def _check_token() -> bool:
+    """Return True only when a token is configured AND the request supplies it."""
     if not VOICE_SERVER_TOKEN:
-        return True
+        # No token configured → always deny protected endpoints.
+        return False
     return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
+
+# ── voice-settings resolution ─────────────────────────────────────────
+def _resolve_voice_settings(call_type: str) -> dict:
+    """Return a voice-settings dict for *call_type*.
+
+    Resolution order:
+    1. ``custom_voice_config.get_custom_voice_settings(call_type)`` – written by
+       voice_training.py when the user trains a custom voice.
+    2. ``voice_config.get_voice_for_context(call_type)`` – built-in presets.
+    3. Hard-coded default (Kore).
+
+    Any exception from user-supplied config is caught so a malformed
+    ``custom_voice_config.py`` never crashes ``/tts``.
+    """
+    # 1. Try custom voice config
+    try:
+        custom = importlib.import_module("custom_voice_config")
+        fn = getattr(custom, "get_custom_voice_settings", None)
+        if callable(fn):
+            result = fn(call_type)
+            if isinstance(result, dict) and result:
+                return result
+    except Exception:
+        pass
+
+    # 2. Fall back to built-in voice config
+    try:
+        if callable(_default_voice_fn):
+            result = _default_voice_fn(call_type)
+            if isinstance(result, dict) and result:
+                return result
+    except Exception:
+        pass
+
+    # 3. Hard-coded default
+    return {"voice_id": "Kore"}
 
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
+    # /health is intentionally open (no token required) so monitoring tools
+    # and the extension's connection check can reach it.
     return jsonify({"status": "ok", "model": _model_status()})
 
 # ── /tts ──────────────────────────────────────────────────────────────
@@ -85,9 +150,12 @@ def tts():
     if synthesize_speech is None:
         return jsonify({"error": "TTS engine not available"}), 503
     try:
-        voice_id = get_voice_for_context(data) if get_voice_for_context else None
-        audio = synthesize_speech(text, voice_id=voice_id, speed=data.get("speed", "normal"))
-        return Response(audio, mimetype="audio/wav")
+        call_type = data.get("call_type", "LEGITIMATE")
+        voice_settings = _resolve_voice_settings(call_type)
+        audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
+        if error:
+            return jsonify({"error": error}), 500
+        return Response(audio_bytes, mimetype=mime_type or "audio/wav")
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -302,6 +370,28 @@ def _model_status():
 
 # ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    host = os.environ.get("HOST", "127.0.0.1")
+    _loopback = {"127.0.0.1", "::1", "localhost"}
+    _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
+    _requested_host = os.environ.get("HOST", "127.0.0.1").strip()
+
+    if _requested_host not in _loopback and not _allow_network:
+        print(
+            f"ERROR: HOST={_requested_host!r} is not a loopback address.  "
+            "Binding to non-loopback addresses exposes this server to the "
+            "network, which contradicts its privacy-first design.\n"
+            "Set ALLOW_NETWORK_BINDING=1 if you understand the risk and "
+            "explicitly want network exposure.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if _allow_network and _requested_host not in _loopback:
+        print(
+            f"WARNING: ALLOW_NETWORK_BINDING=1 is set.  Binding to "
+            f"{_requested_host!r} — this server is reachable from the network.",
+            file=sys.stderr,
+        )
+
+    host = _requested_host if _allow_network else "127.0.0.1"
     port = int(os.environ.get("PORT", 5000))
     app.run(host=host, port=port, debug=False)
