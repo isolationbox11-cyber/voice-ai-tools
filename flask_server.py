@@ -1,139 +1,307 @@
 #!/usr/bin/env python3
 """
-Flask TTS Server
-Provides a local HTTP API for browser-based TTS playback via Chrome extension.
+Voice AI Tools - Flask Backend
+Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status
 
-Environment variables:
-  GOOGLE_API_KEY       - Google GenAI API key (required)
-  VOICE_SERVER_TOKEN   - Shared secret for X-Voice-Token header (required)
-  ALLOWED_ORIGINS      - Comma-separated extra origins (optional)
-  HOST                 - Bind host (default: 127.0.0.1)
-  PORT                 - Bind port (default: 5000)
+Env vars:
+  GOOGLE_API_KEY      - Gemini API key (for TTS)
+  VOICE_SERVER_TOKEN  - shared secret (X-Token header)
+  SHODAN_API_KEY      - Shodan API key (optional)
+  ALLOWED_ORIGINS     - comma-separated extra CORS origins
+  HOST / PORT         - bind address (default 127.0.0.1:5000)
 """
 
-import os
-import importlib
-from flask import Flask, request, jsonify, Response
+import os, io, re, json, time, wave, tempfile, importlib
+from pathlib import Path
+from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-from tts_engine import synthesize_speech
-from voice_config import get_voice_for_context
+# ── optional heavy deps ───────────────────────────────────────────────
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
+
+try:
+    import PyPDF2
+except ImportError:
+    PyPDF2 = None
+
+try:
+    import pdfplumber
+except ImportError:
+    pdfplumber = None
+
+try:
+    from tts_engine import synthesize_speech
+    from voice_config import get_voice_for_context
+except ImportError:
+    synthesize_speech = None
+    get_voice_for_context = None
+
+# ── config ────────────────────────────────────────────────────────────
+VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
+SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
+MAX_TEXT_LENGTH    = 2000
+PRESET_PATH        = Path("voice_presets.json")
+LOG_PATH           = Path("session_log.json")
+MODEL_DIR          = Path("voice_model")
+SAMPLES_DIR        = Path("voice_samples")
+SAMPLES_DIR.mkdir(exist_ok=True)
+MODEL_DIR.mkdir(exist_ok=True)
+
+_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+ALLOWED_ORIGINS = ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"] + _extra_origins
 
 app = Flask(__name__)
+CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
-MAX_TEXT_LENGTH = 2000
-
-# CORS: always allow localhost origins; caller can add extension ID via env
-_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-ALLOWED_ORIGINS = [
-    "http://localhost:5000",
-    "http://127.0.0.1:5000",
-    "null",          # local file:// pages
-] + _extra_origins
-
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}}, supports_credentials=True)
-
-# ---------------------------------------------------------------------------
-# Rate limiting
-# ---------------------------------------------------------------------------
-limiter = Limiter(
-    get_remote_address,
-    app=app,
-    default_limits=["60 per minute"],
-    storage_uri="memory://",
-)
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _check_token() -> bool:
-    """Return True if the request carries a valid auth token."""
+# ── auth ──────────────────────────────────────────────────────────────
+def _check_token():
     if not VOICE_SERVER_TOKEN:
-        # No token configured – accept all (development mode)
         return True
-    return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
+    return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
 
-
-def _resolve_voice_settings(call_type: str) -> dict:
-    """
-    Resolve voice settings, preferring custom_voice_config when available.
-    Falls back to voice_config.get_voice_for_context.
-    """
-    try:
-        cvc = importlib.import_module("custom_voice_config")
-        settings = cvc.get_custom_voice_settings(call_type)
-        # Ensure voice_id is set to the custom voice
-        if not settings.get("voice_id"):
-            settings["voice_id"] = getattr(cvc, "CUSTOM_VOICE_ID", "en-US-Studio-O")
-        return settings
-    except ModuleNotFoundError:
-        pass
-
-    settings = get_voice_for_context(call_type)
-    settings.setdefault("voice_id", "en-US-Studio-O")
-    return settings
-
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
-
-@app.route("/health", methods=["GET"])
+# ── /health ───────────────────────────────────────────────────────────
+@app.route("/health")
 def health():
-    """Health check endpoint."""
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "model": _model_status()})
 
-
+# ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
 @limiter.limit("30 per minute")
 def tts():
-    """
-    Synthesize provided text into audio and return raw audio bytes.
-    
-    Expects a JSON body with "text" (string) and an optional "call_type" (string). On success returns a Flask Response containing raw audio bytes with the appropriate MIME type. On failure returns JSON {"error": <message>} with an HTTP status code: 401 for unauthorized requests, 400 for invalid JSON or text validation errors (missing/empty text or text exceeding MAX_TEXT_LENGTH), and 502 if the underlying synthesis service reports an error.
-    """
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
-
-    data = request.get_json(silent=True)
-    if not data or not isinstance(data, dict):
-        return jsonify({"error": "Invalid JSON body"}), 400
-
-    text = data.get("text", "").strip()
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
     if not text:
-        return jsonify({"error": "text is required"}), 400
+        return jsonify({"error": "No text provided"}), 400
     if len(text) > MAX_TEXT_LENGTH:
-        return jsonify({"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH}"}), 400
+        return jsonify({"error": "Text too long"}), 400
+    if synthesize_speech is None:
+        return jsonify({"error": "TTS engine not available"}), 503
+    try:
+        voice_id = get_voice_for_context(data) if get_voice_for_context else None
+        audio = synthesize_speech(text, voice_id=voice_id, speed=data.get("speed", "normal"))
+        return Response(audio, mimetype="audio/wav")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    call_type = data.get("call_type", "LEGITIMATE").strip().upper()
+# ── /presets ──────────────────────────────────────────────────────────
+@app.route("/presets", methods=["GET", "POST"])
+@limiter.limit("60 per minute")
+def presets():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "GET":
+        try:
+            with open(PRESET_PATH) as f:
+                return jsonify(json.load(f))
+        except Exception:
+            return jsonify({"presets": []})
+    data = request.get_json(silent=True)
+    if not data or not data.get("name"):
+        return jsonify({"error": "Preset needs a name"}), 400
+    presets_list = []
+    if PRESET_PATH.exists():
+        with open(PRESET_PATH) as f:
+            presets_list = json.load(f).get("presets", [])
+    existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
+    if existing is not None:
+        presets_list[existing] = data
+    else:
+        presets_list.append(data)
+    with open(PRESET_PATH, "w") as f:
+        json.dump({"presets": presets_list}, f, indent=2)
+    return jsonify({"ok": True})
 
-    voice_settings = _resolve_voice_settings(call_type)
-    audio_bytes, mime_type, error, _effective_text = synthesize_speech(text, voice_settings)
+# ── /log ──────────────────────────────────────────────────────────────
+@app.route("/log", methods=["GET", "POST"])
+@limiter.limit("120 per minute")
+def log_endpoint():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    if request.method == "GET":
+        try:
+            with open(LOG_PATH) as f:
+                return jsonify(json.load(f))
+        except Exception:
+            return jsonify({"entries": []})
+    entry = request.get_json(silent=True) or {}
+    entries = []
+    if LOG_PATH.exists():
+        try:
+            with open(LOG_PATH) as f:
+                entries = json.load(f).get("entries", [])
+        except Exception:
+            pass
+    if entry.get("action") == "clear":
+        entries = []
+    else:
+        entry["timestamp"] = entry.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        entries.insert(0, entry)
+        if len(entries) > 500:
+            entries = entries[:500]
+    with open(LOG_PATH, "w") as f:
+        json.dump({"entries": entries}, f, indent=2)
+    return jsonify({"ok": True})
 
-    if error:
-        return jsonify({"error": error}), 502
+# ── /shodan ───────────────────────────────────────────────────────────
+@app.route("/shodan")
+@limiter.limit("10 per minute")
+def shodan():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    ip = request.args.get("ip", "").strip()
+    if not ip:
+        return jsonify({"error": "ip param required"}), 400
+    if not SHODAN_API_KEY:
+        return jsonify({"error": "SHODAN_API_KEY not set on server"}), 503
+    if _requests is None:
+        return jsonify({"error": "requests library not installed"}), 503
+    try:
+        r = _requests.get(
+            f"https://api.shodan.io/shodan/host/{ip}",
+            params={"key": SHODAN_API_KEY},
+            timeout=10
+        )
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    return Response(audio_bytes, mimetype=mime_type)
+# ── /analyze_pdf ──────────────────────────────────────────────────────
+@app.route("/analyze_pdf", methods=["POST"])
+@limiter.limit("10 per minute")
+def analyze_pdf():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    f = request.files["file"]
+    raw = f.read()
+    result = {"metadata": {}, "links": [], "ips": [], "suspicious": False, "pages": 0}
+    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
+    suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
 
+    # Try pdfplumber first (better)
+    if pdfplumber:
+        try:
+            with pdfplumber.open(io.BytesIO(raw)) as pdf:
+                result["pages"] = len(pdf.pages)
+                meta = pdf.metadata or {}
+                result["metadata"] = {k: str(v) for k, v in meta.items() if v}
+                full_text = ""
+                for page in pdf.pages:
+                    t = page.extract_text() or ""
+                    full_text += t
+                    for href in (page.hyperlinks or []):
+                        uri = href.get("uri", "")
+                        if uri:
+                            result["links"].append(uri)
+                result["ips"] = list(set(ip_pattern.findall(full_text)))
+                extra_links = url_pattern.findall(full_text)
+                result["links"] = list(set(result["links"] + extra_links))
+                raw_lower = raw.lower().decode("latin-1", errors="ignore")
+                result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+                return jsonify(result)
+        except Exception:
+            pass
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+    # Fallback: PyPDF2
+    if PyPDF2:
+        try:
+            reader = PyPDF2.PdfReader(io.BytesIO(raw))
+            result["pages"] = len(reader.pages)
+            info = reader.metadata or {}
+            result["metadata"] = {str(k).lstrip("/"): str(v) for k, v in info.items() if v}
+            full_text = ""
+            for page in reader.pages:
+                full_text += (page.extract_text() or "")
+            result["ips"] = list(set(ip_pattern.findall(full_text)))
+            result["links"] = list(set(url_pattern.findall(full_text)))
+            raw_lower = raw.lower().decode("latin-1", errors="ignore")
+            result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
+    # Raw fallback - no PDF lib installed
+    raw_lower = raw.lower().decode("latin-1", errors="ignore")
+    raw_str = raw.decode("latin-1", errors="ignore")
+    result["ips"] = list(set(ip_pattern.findall(raw_str)))
+    result["links"] = list(set(url_pattern.findall(raw_str)))
+    result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+    result["metadata"] = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
+    return jsonify(result)
+
+# ── /train ────────────────────────────────────────────────────────────
+@app.route("/train", methods=["POST"])
+@limiter.limit("5 per minute")
+def train():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No audio files uploaded"}), 400
+    saved = []
+    for f in files:
+        fname = f.filename or f"clip_{int(time.time())}.wav"
+        safe = re.sub(r'[^\w.\-]', '_', fname)
+        dest = SAMPLES_DIR / safe
+        f.save(dest)
+        saved.append(safe)
+    # If we have a real training pipeline, call it here
+    # For now: write a manifest so voice_training.py can pick it up
+    manifest = {
+        "samples": saved,
+        "sample_dir": str(SAMPLES_DIR),
+        "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "count": len(saved)
+    }
+    with open(MODEL_DIR / "manifest.json", "w") as mf:
+        json.dump(manifest, mf, indent=2)
+    # Try to call voice_training if available
+    try:
+        from voice_training import train_from_samples
+        train_from_samples([str(SAMPLES_DIR / s) for s in saved])
+        manifest["status"] = "trained"
+    except Exception as e:
+        manifest["status"] = f"samples_saved"
+        manifest["note"] = f"voice_training.py not wired or errored: {e}"
+    with open(MODEL_DIR / "manifest.json", "w") as mf:
+        json.dump(manifest, mf, indent=2)
+    return jsonify({"ok": True, "saved": saved, **manifest})
+
+# ── /model_status ─────────────────────────────────────────────────────
+@app.route("/model_status")
+def model_status():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    return jsonify(_model_status())
+
+def _model_status():
+    manifest_path = MODEL_DIR / "manifest.json"
+    if manifest_path.exists():
+        try:
+            with open(manifest_path) as f:
+                m = json.load(f)
+            return {
+                "trained": True,
+                "count": m.get("count", 0),
+                "trained_at": m.get("trained_at", "unknown"),
+                "status": m.get("status", "unknown")
+            }
+        except Exception:
+            pass
+    return {"trained": False}
+
+# ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not VOICE_SERVER_TOKEN:
-        print("⚠️  WARNING: VOICE_SERVER_TOKEN is not set – the server is open to any caller on localhost.")
-        print("   Set it with: export VOICE_SERVER_TOKEN=<your-secret>")
-
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "5000"))
-
-    print(f"🚀 Voice TTS Server starting on http://{host}:{port}")
+    port = int(os.environ.get("PORT", 5000))
     app.run(host=host, port=port, debug=False)
