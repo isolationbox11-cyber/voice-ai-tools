@@ -1,4 +1,4 @@
-/* popup.js - Voice AI Tools v2.2 - safe storage fix */
+/* popup.js - Voice AI Tools v2.3 - endpoint fixes */
 
 const DEFAULT_SERVER='http://127.0.0.1:5000';
 let serverUrl=DEFAULT_SERVER,token='',activePreset='default',logs=[];
@@ -68,11 +68,18 @@ function initVoice(){
     status.textContent='Speaking...';
     btn.disabled=true;
     try{
-      const r=await fetch(serverUrl+'/speak',{method:'POST',
+      const r=await fetch(serverUrl+'/tts',{method:'POST',
         headers:{'Content-Type':'application/json','X-Token':token},
         body:JSON.stringify({text,preset:preset.value||activePreset})});
-      const d=await r.json();
-      status.textContent=d.status||'Done';
+      if(!r.ok){const e=await r.json();status.textContent='Error: '+(e.error||r.status);btn.disabled=false;return;}
+      const audioBlob=await r.blob();
+      const audioUrl=URL.createObjectURL(audioBlob);
+      const audio=new Audio(audioUrl);
+      audio.onended=()=>URL.revokeObjectURL(audioUrl);
+      audio.onerror=()=>{status.textContent='Audio playback error';URL.revokeObjectURL(audioUrl);};
+      await audio.play();
+      status.textContent='Playing...';
+      audio.onended=()=>{status.textContent='Done';URL.revokeObjectURL(audioUrl);};
       addLog('voice','Spoke: '+text.substring(0,40));
     }catch(e){
       status.textContent='Error - Is Flask running?';
@@ -141,21 +148,17 @@ function initTrain(){
     const name=(voiceName&&voiceName.value.trim())||'my_voice';
     status.textContent='Uploading '+trainClips.length+' clip(s)...';
     submitBtn.disabled=true;
-    let ok=0;
-    for(let i=0;i<trainClips.length;i++){
-      const fd=new FormData();
-      fd.append('audio',trainClips[i],'clip_'+i+'.webm');
-      fd.append('voice_name',name);
-      try{
-        const r=await fetch(serverUrl+'/train',{method:'POST',
-          headers:{'X-Token':token},body:fd});
-        const d=await r.json();
-        if(d.status==='ok')ok++;
-      }catch(e){ addLog('warn','Upload error clip '+i+': '+e.message); }
-    }
-    status.textContent=ok+'/'+trainClips.length+' clips uploaded. Training queued for: '+name;
-    addLog('train','Submitted '+ok+' clips for voice: '+name);
-    trainClips=[];
+    const fd=new FormData();
+    trainClips.forEach((clip,i)=>fd.append('files',clip,'clip_'+i+'.webm'));
+    fd.append('voice_name',name);
+    try{
+      const r=await fetch(serverUrl+'/train',{method:'POST',
+        headers:{'X-Token':token},body:fd});
+      const d=await r.json();
+      status.textContent=(d.ok?'Uploaded '+trainClips.length+' clips for: '+name:'Upload failed: '+(d.error||'unknown'));
+      addLog('train','Submitted '+trainClips.length+' clips for voice: '+name);
+      trainClips=[];
+    }catch(e){ addLog('warn','Upload error: '+e.message); status.textContent='Upload error: '+e.message; }
     submitBtn.disabled=false;
   });
 }
@@ -174,12 +177,13 @@ function initTrack(){
     if(!ip){trackBox.textContent='Enter an IP.';return;}
     trackBox.textContent='Scanning...';
     try{
-      const r=await fetch(serverUrl+'/shodan',{method:'POST',
-        headers:{'Content-Type':'application/json','X-Token':token},
-        body:JSON.stringify({ip})});
+      const r=await fetch(serverUrl+'/shodan?ip='+encodeURIComponent(ip),{
+        headers:{'X-Token':token}});
       const d=await r.json();
+      if(d.error){trackBox.textContent='Error: '+d.error;addLog('warn','Shodan error: '+d.error);return;}
       const lines=['IP: '+d.ip_str,'Org: '+(d.org||'N/A'),'Country: '+(d.country_name||'N/A')];
       if(d.ports&&d.ports.length)lines.push('Ports: '+d.ports.join(', '));
+      if(d.vulns&&Object.keys(d.vulns).length)lines.push('Vulns: '+Object.keys(d.vulns).join(', '));
       trackBox.textContent=lines.join('\n');
       addLog('track','Scanned IP: '+ip);
     }catch(e){
@@ -191,30 +195,33 @@ function initTrack(){
   if(pdfBtn&&pdfInput){
     pdfBtn.addEventListener('click',()=>pdfInput.click());
     pdfInput.addEventListener('change',async()=>{
-      const file=pdfInput.files[0];
-      if(!file)return;
-      trackBox.textContent='Analyzing PDF: '+file.name+'...';
+      const f=pdfInput.files[0];
+      if(!f)return;
+      trackBox.textContent='Analyzing PDF: '+f.name+'...';
       const fd=new FormData();
-      fd.append('pdf',file);
+      fd.append('file',f);
       try{
         const r=await fetch(serverUrl+'/analyze_pdf',{method:'POST',
           headers:{'X-Token':token},body:fd});
         const d=await r.json();
-        const lines=['PDF: '+file.name,'Pages: '+(d.pages||'?'),'Author: '+(d.metadata&&d.metadata.Author||'N/A')];
+        if(d.error){trackBox.textContent='Error: '+d.error;addLog('warn','PDF error: '+d.error);return;}
+        const lines=['PDF: '+f.name,'Pages: '+(d.pages||'?')];
         if(d.metadata)Object.entries(d.metadata).forEach(([k,v])=>lines.push('  '+k+': '+v));
-        if(d.links&&d.links.length){lines.push('','Links ('+d.links.length+'):');d.links.forEach(l=>lines.push(' '+l));}
-        if(d.ips&&d.ips.length){lines.push('','Embedded IPs:');d.ips.forEach(i=>lines.push(' '+i));}
+        if(d.links&&d.links.length){lines.push('','Links ('+d.links.length+'):');d.links.slice(0,10).forEach(l=>lines.push('  '+l));}
+        if(d.ips&&d.ips.length){lines.push('','Embedded IPs:');d.ips.forEach(i=>lines.push('  '+i));}
         if(d.suspicious)lines.push('','\u26A0 SUSPICIOUS CONTENT DETECTED');
         trackBox.textContent=lines.join('\n');
-        addLog('ok','PDF done: '+file.name);
-      }catch{trackBox.textContent='PDF analysis failed. Is Flask running?';addLog('warn','PDF failed');}
+        addLog('ok','PDF done: '+f.name);
+      }catch(e){trackBox.textContent='PDF analysis failed. Is Flask running?';addLog('warn','PDF failed: '+e.message);}
     });
   }
 }
 
 // --- LOG MODE
 function initLog(){
-  document.getElementById('btn-clear-log').addEventListener('click',()=>{
+  const clearBtn=document.getElementById('btn-clear-log');
+  if(!clearBtn)return;
+  clearBtn.addEventListener('click',()=>{
     logs=[];renderLog();
     fetch(serverUrl+'/log',{method:'POST',headers:{'Content-Type':'application/json','X-Token':token},body:JSON.stringify({action:'clear'})}).catch(()=>{});
   });
@@ -258,7 +265,7 @@ async function checkConnection(){
   const label=document.getElementById('conn-label');
   if(!dot)return;
   try{
-    const r=await fetch(serverUrl+'/status',{headers:{'X-Token':token}});
+    const r=await fetch(serverUrl+'/health',{headers:{'X-Token':token}});
     if(r.ok){dot.style.background='#06D6A0';if(label)label.textContent='Connected';}
     else{dot.style.background='#F72585';if(label)label.textContent='Server Error';}
   }catch{
@@ -269,7 +276,8 @@ async function checkConnection(){
 function animateBars(){
   const bars=document.querySelectorAll('.bar');
   if(!bars.length)return;
-  setInterval(()=>{
+  const interval=setInterval(()=>{
+    if(!document.body)return clearInterval(interval);
     bars.forEach(b=>{
       const h=Math.floor(Math.random()*80)+10;
       b.style.height=h+'%';
