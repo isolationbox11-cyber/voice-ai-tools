@@ -5,296 +5,87 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voice AI Tools</title>
   <style>
-    :root {
-      --bg: #0b1a15;
-      --accent: #4CC9F0;
-      --accent2: #7B2FBE;
-      --warn: #F72585;
-      --ok: #06D6A0;
-      --text: #e0e0e0;
-      --panel: rgba(15,61,62,0.6);
-      --glow: 0 0 20px rgba(76,201,240,0.3);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: radial-gradient(ellipse at 50% 30%, rgba(15,61,62,0.5) 0%, transparent 70%), #0b1a15;
-      color: var(--text);
-      font-family: system-ui, sans-serif;
-      width: 400px;
-      min-height: 560px;
-      padding: 0;
-    }
-    header {
-      padding: 16px 20px 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    h1 {
-      font-size: 1rem;
-      letter-spacing: 0.15em;
-      text-transform: uppercase;
-      color: var(--accent);
-      text-shadow: var(--glow);
-    }
-    .status-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: var(--ok);
-      box-shadow: 0 0 8px var(--ok);
-      animation: pulse 2s infinite;
-    }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-    /* TABS */
-    .tabs {
-      display: flex;
-      margin: 14px 20px 0;
-      border-bottom: 1px solid rgba(76,201,240,0.2);
-    }
-    .tab {
-      flex: 1;
-      padding: 8px 0;
-      text-align: center;
-      font-size: 0.7rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      cursor: pointer;
-      color: rgba(224,224,224,0.45);
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-    }
-    .tab.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
-      text-shadow: 0 0 10px rgba(76,201,240,0.6);
-    }
-    .tab:hover { color: var(--accent); }
-
-    /* PANELS */
-    .panel { display: none; padding: 16px 20px 20px; }
-    .panel.active { display: block; }
-
-    /* VOICE PANEL */
-    .visualizer {
-      width: 100%;
-      height: 60px;
-      background: var(--panel);
-      border-radius: 8px;
-      overflow: hidden;
-      margin-bottom: 12px;
-      display: flex;
-      align-items: flex-end;
-      justify-content: center;
-      gap: 2px;
-      padding: 4px;
-    }
-    .bar {
-      width: 4px;
-      border-radius: 2px;
-      background: var(--accent);
-      min-height: 4px;
-      transition: height 0.1s;
-    }
-    textarea {
-      width: 100%;
-      background: var(--panel);
-      border: 1px solid rgba(76,201,240,0.25);
-      border-radius: 8px;
-      color: var(--text);
-      font-size: 0.85rem;
-      padding: 10px;
-      resize: none;
-      outline: none;
-      height: 80px;
-      margin-bottom: 10px;
-    }
-    textarea:focus { border-color: var(--accent); box-shadow: var(--glow); }
-
-    .row { display: flex; gap: 8px; margin-bottom: 10px; }
-    select, input[type=text], input[type=number] {
-      flex: 1;
-      background: var(--panel);
-      border: 1px solid rgba(76,201,240,0.2);
-      border-radius: 6px;
-      color: var(--text);
-      font-size: 0.8rem;
-      padding: 7px 10px;
-      outline: none;
-    }
-    select:focus, input:focus { border-color: var(--accent); }
-
-    .btn {
-      padding: 9px 18px;
-      border-radius: 6px;
-      border: none;
-      font-size: 0.78rem;
-      font-weight: 600;
-      letter-spacing: 0.08em;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .btn-primary {
-      background: linear-gradient(135deg, #4CC9F0, #7B2FBE);
-      color: #fff;
-      width: 100%;
-      margin-bottom: 8px;
-    }
-    .btn-primary:hover { opacity: 0.85; transform: translateY(-1px); box-shadow: var(--glow); }
-    .btn-sm {
-      flex: 1;
-      background: rgba(76,201,240,0.1);
-      color: var(--accent);
-      border: 1px solid rgba(76,201,240,0.25);
-    }
-    .btn-sm:hover { background: rgba(76,201,240,0.2); }
-    .btn-warn {
-      background: rgba(247,37,133,0.15);
-      color: var(--warn);
-      border: 1px solid rgba(247,37,133,0.3);
-    }
-
-    /* preset list */
-    .preset-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 10px;
-    }
-    .preset-chip {
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.72rem;
-      background: rgba(123,47,190,0.2);
-      border: 1px solid rgba(123,47,190,0.4);
-      color: #c084fc;
-      cursor: pointer;
-    }
-    .preset-chip:hover { background: rgba(123,47,190,0.4); }
-
-    /* TRACK PANEL */
-    .track-input-row { display: flex; gap: 8px; margin-bottom: 10px; }
-    .result-box {
-      background: var(--panel);
-      border: 1px solid rgba(76,201,240,0.15);
-      border-radius: 8px;
-      padding: 12px;
-      font-size: 0.78rem;
-      line-height: 1.6;
-      min-height: 120px;
-      color: rgba(224,224,224,0.85);
-      white-space: pre-wrap;
-      word-break: break-all;
-      margin-bottom: 10px;
-    }
-    .tag {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 0.68rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-    }
-    .tag-ok { background: rgba(6,214,160,0.15); color: var(--ok); }
-    .tag-warn { background: rgba(247,37,133,0.15); color: var(--warn); }
-    .tag-info { background: rgba(76,201,240,0.12); color: var(--accent); }
-    .section-label {
-      font-size: 0.68rem;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: rgba(224,224,224,0.4);
-      margin-bottom: 6px;
-    }
-    .pdf-drop {
-      border: 2px dashed rgba(76,201,240,0.25);
-      border-radius: 8px;
-      padding: 18px;
-      text-align: center;
-      font-size: 0.78rem;
-      color: rgba(224,224,224,0.4);
-      cursor: pointer;
-      transition: all 0.2s;
-      margin-bottom: 10px;
-    }
-    .pdf-drop:hover, .pdf-drop.dragover {
-      border-color: var(--accent);
-      background: rgba(76,201,240,0.05);
-      color: var(--accent);
-    }
-
-    /* LOG PANEL */
-    .log-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      max-height: 340px;
-      overflow-y: auto;
-    }
-    .log-item {
-      background: var(--panel);
-      border: 1px solid rgba(76,201,240,0.1);
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 0.75rem;
-      line-height: 1.5;
-    }
-    .log-item .log-time { color: rgba(224,224,224,0.35); font-size: 0.68rem; }
-    .log-item .log-type { font-weight: 700; margin-right: 6px; }
-    .log-empty {
-      text-align: center;
-      color: rgba(224,224,224,0.25);
-      font-size: 0.78rem;
-      padding: 40px 0;
-    }
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(76,201,240,0.3); border-radius: 2px; }
-
-    .footer {
-      padding: 10px 20px 14px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-top: 1px solid rgba(76,201,240,0.08);
-      font-size: 0.65rem;
-      color: rgba(224,224,224,0.25);
-    }
-    #conn-status { color: var(--ok); }
+    :root{--bg:#0b1a15;--accent:#4CC9F0;--accent2:#7B2FBE;--warn:#F72585;--ok:#06D6A0;--text:#e0e0e0;--panel:rgba(15,61,62,0.6);--glow:0 0 20px rgba(76,201,240,0.3)}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:radial-gradient(ellipse at 50% 30%,rgba(15,61,62,.5) 0%,transparent 70%),#0b1a15;color:var(--text);font-family:system-ui,sans-serif;width:400px;min-height:580px;padding:0}
+    header{padding:16px 20px 0;display:flex;align-items:center;justify-content:space-between}
+    h1{font-size:1rem;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);text-shadow:var(--glow)}
+    .status-dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok);animation:pulse 2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    .tabs{display:flex;margin:14px 20px 0;border-bottom:1px solid rgba(76,201,240,.2)}
+    .tab{flex:1;padding:8px 0;text-align:center;font-size:.65rem;letter-spacing:.09em;text-transform:uppercase;cursor:pointer;color:rgba(224,224,224,.4);border-bottom:2px solid transparent;transition:all .2s}
+    .tab.active{color:var(--accent);border-bottom-color:var(--accent);text-shadow:0 0 10px rgba(76,201,240,.6)}
+    .tab:hover{color:var(--accent)}
+    .panel{display:none;padding:14px 20px 20px}
+    .panel.active{display:block}
+    .visualizer{width:100%;height:56px;background:var(--panel);border-radius:8px;overflow:hidden;margin-bottom:12px;display:flex;align-items:flex-end;justify-content:center;gap:2px;padding:4px}
+    .bar{width:4px;border-radius:2px;background:var(--accent);min-height:4px;transition:height .1s}
+    textarea{width:100%;background:var(--panel);border:1px solid rgba(76,201,240,.25);border-radius:8px;color:var(--text);font-size:.85rem;padding:10px;resize:none;outline:none;height:76px;margin-bottom:10px}
+    textarea:focus{border-color:var(--accent);box-shadow:var(--glow)}
+    .row{display:flex;gap:8px;margin-bottom:10px}
+    select,input[type=text]{flex:1;background:var(--panel);border:1px solid rgba(76,201,240,.2);border-radius:6px;color:var(--text);font-size:.8rem;padding:7px 10px;outline:none}
+    select:focus,input:focus{border-color:var(--accent)}
+    .btn{padding:9px 18px;border-radius:6px;border:none;font-size:.78rem;font-weight:600;letter-spacing:.08em;cursor:pointer;transition:all .2s}
+    .btn-primary{background:linear-gradient(135deg,#4CC9F0,#7B2FBE);color:#fff;width:100%;margin-bottom:8px}
+    .btn-primary:hover{opacity:.85;transform:translateY(-1px);box-shadow:var(--glow)}
+    .btn-sm{flex:1;background:rgba(76,201,240,.1);color:var(--accent);border:1px solid rgba(76,201,240,.25)}
+    .btn-sm:hover{background:rgba(76,201,240,.2)}
+    .btn-warn{background:rgba(247,37,133,.15);color:var(--warn);border:1px solid rgba(247,37,133,.3)}
+    .btn-ok{background:rgba(6,214,160,.15);color:var(--ok);border:1px solid rgba(6,214,160,.3)}
+    .preset-list{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+    .preset-chip{padding:4px 10px;border-radius:20px;font-size:.72rem;background:rgba(123,47,190,.2);border:1px solid rgba(123,47,190,.4);color:#c084fc;cursor:pointer}
+    .preset-chip:hover{background:rgba(123,47,190,.4)}
+    .section-label{font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:rgba(224,224,224,.4);margin-bottom:6px}
+    /* TRAIN */
+    .train-status{background:var(--panel);border:1px solid rgba(76,201,240,.15);border-radius:8px;padding:10px 14px;font-size:.78rem;line-height:1.6;margin-bottom:12px;min-height:48px;color:rgba(224,224,224,.7)}
+    .record-ring{width:72px;height:72px;border-radius:50%;background:rgba(247,37,133,.1);border:2px solid rgba(247,37,133,.4);display:flex;align-items:center;justify-content:center;cursor:pointer;margin:0 auto 14px;transition:all .2s}
+    .record-ring:hover{background:rgba(247,37,133,.2);border-color:var(--warn)}
+    .record-ring.recording{background:rgba(247,37,133,.25);border-color:var(--warn);animation:ripple 1.2s infinite}
+    @keyframes ripple{0%{box-shadow:0 0 0 0 rgba(247,37,133,.4)}70%{box-shadow:0 0 0 16px rgba(247,37,133,0)}100%{box-shadow:0 0 0 0 rgba(247,37,133,0)}}
+    .record-icon{font-size:1.6rem}
+    .record-label{text-align:center;font-size:.72rem;color:rgba(224,224,224,.45);margin-bottom:14px}
+    .train-clips{display:flex;flex-direction:column;gap:6px;max-height:110px;overflow-y:auto;margin-bottom:12px}
+    .clip-item{background:var(--panel);border:1px solid rgba(76,201,240,.1);border-radius:6px;padding:6px 10px;display:flex;align-items:center;gap:8px;font-size:.75rem}
+    .clip-item audio{flex:1;height:28px}
+    .clip-del{cursor:pointer;color:var(--warn);font-size:1rem;flex-shrink:0}
+    .upload-drop{border:2px dashed rgba(76,201,240,.25);border-radius:8px;padding:14px;text-align:center;font-size:.76rem;color:rgba(224,224,224,.4);cursor:pointer;transition:all .2s;margin-bottom:12px}
+    .upload-drop:hover,.upload-drop.dragover{border-color:var(--accent);background:rgba(76,201,240,.05);color:var(--accent)}
+    .progress-bar-wrap{background:rgba(255,255,255,.05);border-radius:4px;height:6px;margin-bottom:10px;overflow:hidden;display:none}
+    .progress-bar{height:100%;width:0%;background:linear-gradient(90deg,#4CC9F0,#7B2FBE);border-radius:4px;transition:width .3s}
+    /* TRACK */
+    .track-input-row{display:flex;gap:8px;margin-bottom:10px}
+    .result-box{background:var(--panel);border:1px solid rgba(76,201,240,.15);border-radius:8px;padding:12px;font-size:.78rem;line-height:1.6;min-height:110px;color:rgba(224,224,224,.85);white-space:pre-wrap;word-break:break-all;margin-bottom:10px}
+    .pdf-drop{border:2px dashed rgba(76,201,240,.25);border-radius:8px;padding:16px;text-align:center;font-size:.76rem;color:rgba(224,224,224,.4);cursor:pointer;transition:all .2s;margin-bottom:10px}
+    .pdf-drop:hover,.pdf-drop.dragover{border-color:var(--accent);background:rgba(76,201,240,.05);color:var(--accent)}
+    /* LOG */
+    .log-list{display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto}
+    .log-item{background:var(--panel);border:1px solid rgba(76,201,240,.1);border-radius:6px;padding:8px 12px;font-size:.75rem;line-height:1.5}
+    .log-item .log-time{color:rgba(224,224,224,.35);font-size:.68rem}
+    .log-item .log-type{font-weight:700;margin-right:6px}
+    .log-empty{text-align:center;color:rgba(224,224,224,.25);font-size:.78rem;padding:40px 0}
+    ::-webkit-scrollbar{width:4px}
+    ::-webkit-scrollbar-track{background:transparent}
+    ::-webkit-scrollbar-thumb{background:rgba(76,201,240,.3);border-radius:2px}
+    .footer{padding:10px 20px 14px;display:flex;justify-content:space-between;align-items:center;border-top:1px solid rgba(76,201,240,.08);font-size:.65rem;color:rgba(224,224,224,.25)}
+    #conn-status{color:var(--ok)}
   </style>
 </head>
 <body>
-
 <header>
   <h1>Voice AI Tools</h1>
   <div class="status-dot" id="status-dot"></div>
 </header>
-
 <div class="tabs">
   <div class="tab active" data-tab="voice">&#127908; Voice</div>
+  <div class="tab" data-tab="train">&#127381; Train</div>
   <div class="tab" data-tab="track">&#128270; Track</div>
   <div class="tab" data-tab="log">&#128196; Log</div>
 </div>
-
-<!-- VOICE PANEL -->
+<!-- VOICE -->
 <div class="panel active" id="panel-voice">
   <div class="visualizer" id="visualizer">
-    <div class="bar" style="height:12px"></div>
-    <div class="bar" style="height:24px"></div>
-    <div class="bar" style="height:18px"></div>
-    <div class="bar" style="height:36px"></div>
-    <div class="bar" style="height:28px"></div>
-    <div class="bar" style="height:44px"></div>
-    <div class="bar" style="height:32px"></div>
-    <div class="bar" style="height:20px"></div>
-    <div class="bar" style="height:38px"></div>
-    <div class="bar" style="height:14px"></div>
-    <div class="bar" style="height:26px"></div>
-    <div class="bar" style="height:50px"></div>
-    <div class="bar" style="height:30px"></div>
-    <div class="bar" style="height:16px"></div>
-    <div class="bar" style="height:22px"></div>
+    <div class="bar" style="height:12px"></div><div class="bar" style="height:24px"></div><div class="bar" style="height:18px"></div><div class="bar" style="height:36px"></div><div class="bar" style="height:28px"></div><div class="bar" style="height:44px"></div><div class="bar" style="height:32px"></div><div class="bar" style="height:20px"></div><div class="bar" style="height:38px"></div><div class="bar" style="height:14px"></div><div class="bar" style="height:26px"></div><div class="bar" style="height:50px"></div><div class="bar" style="height:30px"></div><div class="bar" style="height:16px"></div><div class="bar" style="height:22px"></div>
   </div>
-
   <div class="section-label">Voice Preset</div>
   <div class="preset-list" id="preset-list">
     <div class="preset-chip" data-preset="default">Default</div>
@@ -302,34 +93,37 @@
     <div class="preset-chip" data-preset="soft">Soft</div>
     <div class="preset-chip" data-preset="radio">Radio</div>
   </div>
-
   <div class="row">
-    <select id="voice-lang">
-      <option value="en-US">English (US)</option>
-      <option value="en-GB">English (UK)</option>
-      <option value="es-ES">Spanish</option>
-      <option value="fr-FR">French</option>
-      <option value="de-DE">German</option>
-      <option value="ja-JP">Japanese</option>
-    </select>
-    <select id="voice-speed">
-      <option value="normal">Normal Speed</option>
-      <option value="slow">Slow</option>
-      <option value="fast">Fast</option>
-    </select>
+    <select id="voice-lang"><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option><option value="es-ES">Spanish</option><option value="fr-FR">French</option><option value="de-DE">German</option><option value="ja-JP">Japanese</option></select>
+    <select id="voice-speed"><option value="normal">Normal Speed</option><option value="slow">Slow</option><option value="fast">Fast</option></select>
   </div>
-
   <textarea id="tts-text" placeholder="Type what you want to speak in your cloned voice..."></textarea>
-
   <button class="btn btn-primary" id="btn-speak">&#9654; SPEAK IN CLONED VOICE</button>
-
   <div class="row">
     <button class="btn btn-sm" id="btn-save-preset">+ Save Preset</button>
     <button class="btn btn-sm btn-warn" id="btn-clear-voice">Clear</button>
   </div>
 </div>
-
-<!-- TRACK PANEL -->
+<!-- TRAIN -->
+<div class="panel" id="panel-train">
+  <div class="train-status" id="train-status">No voice model trained yet. Record samples or upload audio below.</div>
+  <div class="section-label">Record your voice</div>
+  <div class="record-ring" id="record-btn"><span class="record-icon" id="record-icon">&#127897;</span></div>
+  <div class="record-label" id="record-label">Tap to start recording</div>
+  <div class="section-label">Recorded clips</div>
+  <div class="train-clips" id="train-clips">
+    <div style="font-size:.72rem;color:rgba(224,224,224,.25);text-align:center;padding:10px 0">No clips yet</div>
+  </div>
+  <div class="upload-drop" id="audio-drop">&#127897; Drop audio file here or click to upload<br><span style="font-size:.68rem;color:rgba(76,201,240,.5)">.wav .mp3 .m4a .ogg accepted</span></div>
+  <input type="file" id="audio-file" accept="audio/*" style="display:none" multiple>
+  <div class="progress-bar-wrap" id="train-progress-wrap"><div class="progress-bar" id="train-progress"></div></div>
+  <div class="row"><button class="btn btn-primary" id="btn-train" style="margin-bottom:0">&#129302; TRAIN MY VOICE</button></div>
+  <div class="row" style="margin-top:8px">
+    <button class="btn btn-sm btn-warn" id="btn-clear-clips">Clear Clips</button>
+    <button class="btn btn-sm btn-ok" id="btn-check-model">Check Model</button>
+  </div>
+</div>
+<!-- TRACK -->
 <div class="panel" id="panel-track">
   <div class="section-label">IP / Domain Lookup</div>
   <div class="track-input-row">
@@ -337,30 +131,23 @@
     <button class="btn btn-sm" id="btn-track">Scan</button>
   </div>
   <div class="result-box" id="track-result">Results will appear here after scanning...</div>
-
   <div class="section-label">Drop PDF to Analyze</div>
-  <div class="pdf-drop" id="pdf-drop">&#128196; Drop a PDF here or click to select<br><span style="font-size:0.68rem;color:rgba(76,201,240,0.5)">Extracts links, metadata, embedded IPs</span></div>
+  <div class="pdf-drop" id="pdf-drop">&#128196; Drop a PDF here or click to select<br><span style="font-size:.68rem;color:rgba(76,201,240,.5)">Extracts links, metadata, embedded IPs</span></div>
   <input type="file" id="pdf-file" accept=".pdf" style="display:none">
-
   <div class="result-box" id="pdf-result" style="min-height:60px">PDF analysis output...</div>
 </div>
-
-<!-- LOG PANEL -->
+<!-- LOG -->
 <div class="panel" id="panel-log">
   <div class="row" style="margin-bottom:12px">
     <div class="section-label" style="margin:0;line-height:2">Session Log</div>
     <button class="btn btn-sm btn-warn" id="btn-clear-log" style="flex:0;padding:4px 12px">Clear</button>
   </div>
-  <div class="log-list" id="log-list">
-    <div class="log-empty">No activity logged yet.</div>
-  </div>
+  <div class="log-list" id="log-list"><div class="log-empty">No activity logged yet.</div></div>
 </div>
-
 <div class="footer">
-  <span>voice-ai-tools v2.0</span>
+  <span>voice-ai-tools v2.1</span>
   <span id="conn-status">&#9679; connected</span>
 </div>
-
 <script src="popup.js"></script>
 </body>
 </html>
