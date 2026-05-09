@@ -7,6 +7,9 @@
     "storage",
     "offscreen"
   ],
+  "host_permissions": [
+    "http://127.0.0.1:5000/*"
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Voice AI TTS"
