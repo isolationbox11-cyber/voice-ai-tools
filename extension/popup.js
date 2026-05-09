@@ -1,21 +1,21 @@
-/* popup.js - Voice AI Tools v3.0 - karaoke train UI */
+/* popup.js - Voice AI Tools v3.0 - karaoke train UI, no emoji */
 
 const DEFAULT_SERVER = 'http://127.0.0.1:5000';
 let serverUrl = DEFAULT_SERVER, token = '', logs = [];
 let mediaRecorder = null, recordedChunks = [], isRecording = false;
-let trainClips = [null, null, null, null]; // one slot per take
+let trainClips = [null, null, null, null];
 let currentTake = 0;
 let timerInterval = null;
 let useClonedVoice = true;
 
-// ── karaoke presets ──────────────────────────────────────────────────
+// -- karaoke presets
 const PRESETS = [
   {
     id: 'calm',
     label: 'Calm Reading',
-    emoji: '🌿',
+    sub: 'relaxed tone',
     moodClass: 'calm',
-    hint: 'Read this in a relaxed, even tone — like explaining something to a friend.',
+    hint: 'Read this in a relaxed, even tone -- like explaining something to a friend.',
     lines: [
       'Today is quiet, and I am taking my time with my words.',
       'I am not in a rush, and nothing here is urgent.',
@@ -26,9 +26,9 @@ const PRESETS = [
   {
     id: 'rant',
     label: 'Mild Rant',
-    emoji: '🔥',
+    sub: 'animated tone',
     moodClass: 'rant',
-    hint: 'Read this like you are venting to someone who already agrees with you — not yelling, just animated.',
+    hint: 'Read this like you are venting to someone who already agrees with you -- not yelling, just animated.',
     lines: [
       'I cannot believe how much nonsense I deal with just to get basic things done.',
       'Every time I think I have seen the last ridiculous error, another one pops up.',
@@ -39,7 +39,7 @@ const PRESETS = [
   {
     id: 'curious',
     label: 'Curious Questions',
-    emoji: '🔍',
+    sub: 'skeptical tone',
     moodClass: 'curious',
     hint: 'Read this like you are honestly wondering the answer, with a little skepticism mixed in.',
     lines: [
@@ -52,9 +52,9 @@ const PRESETS = [
   {
     id: 'singing',
     label: 'Short Song Line',
-    emoji: '🎵',
+    sub: 'sung freely',
     moodClass: 'singing',
-    hint: 'Sing this — whatever melody comes to you. Don\'t overthink it.',
+    hint: 'Sing this -- whatever melody comes to you. Do not overthink it.',
     lines: [
       'I keep singing to this little machine,',
       'hoping it learns what my voice really means.'
@@ -62,7 +62,7 @@ const PRESETS = [
   }
 ];
 
-// ── storage wrapper ──────────────────────────────────────────────────
+// -- storage wrapper
 const store = {
   get(keys, cb) {
     try {
@@ -86,7 +86,7 @@ const store = {
   }
 };
 
-// ── boot ─────────────────────────────────────────────────────────────
+// -- boot
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   initTabs();
@@ -106,7 +106,7 @@ async function loadSettings() {
   }));
 }
 
-// ── tabs ─────────────────────────────────────────────────────────────
+// -- tabs
 function initTabs() {
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => {
@@ -118,7 +118,7 @@ function initTabs() {
   });
 }
 
-// ── voice tab ────────────────────────────────────────────────────────
+// -- voice tab
 function initVoice() {
   const speakBtn = document.getElementById('btn-speak');
   const clearBtn = document.getElementById('btn-clear-voice');
@@ -130,15 +130,15 @@ function initVoice() {
   if (clonedBtn) clonedBtn.addEventListener('click', () => {
     useClonedVoice = true;
     clonedBtn.classList.add('active');
-    stockBtn.classList.remove('active');
-    if (statusEl) statusEl.textContent = 'Using: your cloned voice';
+    if (stockBtn) stockBtn.classList.remove('active');
+    if (statusEl) statusEl.textContent = 'Using your cloned voice';
   });
 
   if (stockBtn) stockBtn.addEventListener('click', () => {
     useClonedVoice = false;
     stockBtn.classList.add('active');
-    clonedBtn.classList.remove('active');
-    if (statusEl) statusEl.textContent = 'Using: stock voice';
+    if (clonedBtn) clonedBtn.classList.remove('active');
+    if (statusEl) statusEl.textContent = 'Using stock voice';
   });
 
   if (clearBtn) clearBtn.addEventListener('click', () => {
@@ -146,7 +146,7 @@ function initVoice() {
     if (txt) txt.value = '';
   });
 
-  if (speakBtn) speakBtn.addEventListener('click', () => speakText(useClonedVoice));
+  if (speakBtn) speakBtn.addEventListener('click', () => speakText(useClonedVoice, false));
 
   if (compareBtn) compareBtn.addEventListener('click', async () => {
     const txt = document.getElementById('tts-text');
@@ -168,18 +168,14 @@ async function speakText(cloned, silent) {
   const speakBtn = document.getElementById('btn-speak');
   const text = txt ? txt.value.trim() : '';
   if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
-  if (!silent) { if (speakBtn) speakBtn.disabled = true; }
+  if (!silent && speakBtn) speakBtn.disabled = true;
   if (statusEl && !silent) statusEl.textContent = 'Speaking...';
   const speed = document.getElementById('voice-speed');
   try {
     const r = await fetch(serverUrl + '/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Token': token },
-      body: JSON.stringify({
-        text,
-        voice_id: cloned ? 'cloned' : 'kore',
-        speed: speed ? speed.value : 'normal'
-      })
+      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'kore', speed: speed ? speed.value : 'normal' })
     });
     if (!r.ok) {
       const e = await r.json();
@@ -195,13 +191,13 @@ async function speakText(cloned, silent) {
     await audio.play();
     addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
   } catch (e) {
-    if (statusEl) statusEl.textContent = 'Error — is Flask running?';
+    if (statusEl) statusEl.textContent = 'Error -- is Flask running?';
     addLog('warn', 'Voice error: ' + e.message);
   }
   if (!silent && speakBtn) speakBtn.disabled = false;
 }
 
-// ── train tab (karaoke) ───────────────────────────────────────────────
+// -- train tab (karaoke)
 function initTrain() {
   const recordBtn = document.getElementById('record-btn');
   const trainBtn = document.getElementById('btn-train');
@@ -253,15 +249,15 @@ function initTrain() {
       const d = await r.json();
       const idEl = document.getElementById('trained-voice-id');
       if (d.trained) {
-        const msg = 'Model: ' + (d.status || 'trained') + ' · ' + (d.count || '?') + ' clips · ' + (d.trained_at || '');
-        if (status) status.textContent = msg;
+        if (status) status.textContent = 'Model: ' + (d.status || 'trained') + ' / ' + (d.count || '?') + ' clips / ' + (d.trained_at || '');
         if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
-        if (d.error && status) status.textContent += ' ⚠ ' + d.error;
+        if (d.error && status) status.textContent += ' -- ' + d.error;
       } else {
         if (status) status.textContent = 'No model trained yet.';
         if (idEl) idEl.style.display = 'none';
       }
     } catch (e) {
+      const status = document.getElementById('train-status');
       if (status) status.textContent = 'Could not reach server.';
     }
   });
@@ -270,30 +266,29 @@ function initTrain() {
 function renderKaraokeStep(step) {
   const p = PRESETS[step];
   const moodEl = document.getElementById('karaoke-mood');
-  const emojiEl = document.getElementById('karaoke-emoji');
   const labelEl = document.getElementById('karaoke-mood-label');
+  const subEl = document.getElementById('karaoke-take-sub');
   const hintEl = document.getElementById('karaoke-hint');
   const scriptEl = document.getElementById('karaoke-script');
   const recordLabel = document.getElementById('record-label');
 
-  if (moodEl) { moodEl.className = 'karaoke-mood ' + p.moodClass; }
-  if (emojiEl) emojiEl.textContent = p.emoji;
+  if (moodEl) moodEl.className = 'karaoke-mood ' + p.moodClass;
   if (labelEl) labelEl.textContent = p.label;
+  if (subEl) subEl.textContent = p.sub;
   if (hintEl) hintEl.textContent = p.hint;
 
   if (scriptEl) {
     scriptEl.innerHTML = p.lines.map((line, i) =>
-      `<span class="kline" data-line="${i}">${esc(line)}</span>`
+      '<span class="kline" data-line="' + i + '">' + esc(line) + '</span>'
     ).join('<br>');
   }
 
   if (recordLabel) {
     recordLabel.textContent = trainClips[step]
-      ? '✓ Take ' + (step + 1) + ' recorded — tap to re-record'
+      ? 'Take ' + (step + 1) + ' recorded -- tap to re-record'
       : 'Tap to record take ' + (step + 1) + ' of ' + PRESETS.length;
   }
 
-  // update step dots
   document.querySelectorAll('.step-dot').forEach((dot, i) => {
     dot.classList.remove('active', 'done');
     if (i < step) dot.classList.add('done');
@@ -312,13 +307,12 @@ function startRecording() {
       trainClips[currentTake] = file;
       updateTrainBtn();
       const label = document.getElementById('record-label');
-      if (label) label.textContent = '✓ Take ' + (currentTake + 1) + ' saved!';
-      const status = document.getElementById('train-status');
+      if (label) label.textContent = 'Take ' + (currentTake + 1) + ' saved.';
       const done = trainClips.filter(Boolean).length;
+      const status = document.getElementById('train-status');
       if (status) status.textContent = done + ' of ' + PRESETS.length + ' takes recorded.';
       addLog('train', 'Take ' + (currentTake + 1) + ' saved: ' + PRESETS[currentTake].label);
       stream.getTracks().forEach(t => t.stop());
-      // auto-advance to next take
       if (currentTake < PRESETS.length - 1) {
         setTimeout(() => { currentTake++; renderKaraokeStep(currentTake); }, 600);
       }
@@ -328,9 +322,9 @@ function startRecording() {
     const ring = document.getElementById('record-btn');
     const icon = document.getElementById('record-icon');
     if (ring) ring.classList.add('recording');
-    if (icon) icon.textContent = '⏹';
+    if (icon) icon.textContent = 'STOP';
     const label = document.getElementById('record-label');
-    if (label) label.textContent = 'Recording... tap to stop';
+    if (label) label.textContent = 'Recording -- tap to stop';
     startTimer();
     highlightLines();
   }).catch(e => {
@@ -346,7 +340,7 @@ function stopRecording() {
   const ring = document.getElementById('record-btn');
   const icon = document.getElementById('record-icon');
   if (ring) ring.classList.remove('recording');
-  if (icon) icon.textContent = '🎙';
+  if (icon) icon.textContent = 'REC';
   stopTimer();
   clearLineHighlight();
 }
@@ -395,12 +389,12 @@ function updateTrainBtn() {
   const btn = document.getElementById('btn-train');
   const done = trainClips.filter(Boolean).length;
   if (!btn) return;
-  btn.textContent = '🤖 TRAIN MY VOICE (' + done + '/' + PRESETS.length + ')';
+  btn.textContent = 'TRAIN MY VOICE (' + done + '/' + PRESETS.length + ')';
   btn.disabled = done === 0;
   if (done === PRESETS.length) {
     btn.style.background = 'linear-gradient(135deg,#06D6A0,#4CC9F0)';
     const status = document.getElementById('train-status');
-    if (status) status.textContent = 'All takes recorded! Press Train My Voice.';
+    if (status) status.textContent = 'All takes recorded. Press Train My Voice.';
   }
 }
 
@@ -410,7 +404,7 @@ async function submitTraining() {
   const clips = trainClips.filter(Boolean);
   if (!clips.length) { if (status) status.textContent = 'No clips recorded yet.'; return; }
   if (status) status.textContent = 'Uploading ' + clips.length + ' clip(s) and training...';
-  if (trainBtn) { trainBtn.disabled = true; trainBtn.textContent = '⏳ TRAINING...'; }
+  if (trainBtn) { trainBtn.disabled = true; trainBtn.textContent = 'TRAINING...'; }
   const fd = new FormData();
   clips.forEach(f => fd.append('files', f, f.name));
   try {
@@ -419,23 +413,23 @@ async function submitTraining() {
     const idEl = document.getElementById('trained-voice-id');
     if (d.ok) {
       if (status) status.textContent = d.status === 'trained'
-        ? 'Voice trained! ID: ' + (d.voice_id || 'saved')
+        ? 'Voice trained. ID: ' + (d.voice_id || 'saved')
         : (d.note || d.status || 'Samples saved.');
       if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
-      if (d.error && status) status.textContent += ' ⚠ ' + d.error;
-      addLog('train', 'Training result: ' + (d.status || 'ok') + ' · ' + (d.voice_id || ''));
+      if (d.error && status) status.textContent += ' -- ' + d.error;
+      addLog('train', 'Training result: ' + (d.status || 'ok') + ' / ' + (d.voice_id || ''));
     } else {
       if (status) status.textContent = 'Training failed: ' + (d.error || 'unknown error');
       addLog('warn', 'Training failed: ' + (d.error || 'unknown'));
     }
   } catch (e) {
-    if (status) status.textContent = 'Upload error — is Flask running?';
+    if (status) status.textContent = 'Upload error -- is Flask running?';
     addLog('warn', 'Train upload error: ' + e.message);
   }
   if (trainBtn) { trainBtn.disabled = false; updateTrainBtn(); }
 }
 
-// ── track tab ─────────────────────────────────────────────────────────
+// -- track tab
 function initTrack() {
   const scanBtn = document.getElementById('btn-track');
   const pdfDrop = document.getElementById('pdf-drop');
@@ -451,7 +445,7 @@ function initTrack() {
     try {
       const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Token': token } });
       const d = await r.json();
-      if (d.error) { trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
+      if (d.error) { if (trackBox) trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
       const lines = ['IP: ' + d.ip_str, 'Org: ' + (d.org || 'N/A'), 'Country: ' + (d.country_name || 'N/A')];
       if (d.ports && d.ports.length) lines.push('Ports: ' + d.ports.join(', '));
       if (d.vulns && Object.keys(d.vulns).length) lines.push('Vulns: ' + Object.keys(d.vulns).join(', '));
@@ -484,7 +478,7 @@ async function analyzePDF(f, box) {
     if (d.metadata) Object.entries(d.metadata).forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
     if (d.links && d.links.length) { lines.push('', 'Links (' + d.links.length + '):'); d.links.slice(0, 10).forEach(l => lines.push('  ' + l)); }
     if (d.ips && d.ips.length) { lines.push('', 'Embedded IPs:'); d.ips.forEach(i => lines.push('  ' + i)); }
-    if (d.suspicious) lines.push('', '⚠ SUSPICIOUS CONTENT DETECTED');
+    if (d.suspicious) lines.push('', 'WARNING: SUSPICIOUS CONTENT DETECTED');
     if (box) box.textContent = lines.join('\n');
     addLog('ok', 'PDF done: ' + f.name);
   } catch (e) {
@@ -493,7 +487,7 @@ async function analyzePDF(f, box) {
   }
 }
 
-// ── log tab ───────────────────────────────────────────────────────────
+// -- log tab
 function initLog() {
   const clearBtn = document.getElementById('btn-clear-log');
   if (!clearBtn) return;
@@ -515,12 +509,12 @@ function renderLog() {
   if (!list) return;
   if (!logs.length) { list.innerHTML = '<div class="log-empty">No activity logged yet.</div>'; return; }
   const c = { voice: '#4CC9F0', train: '#06D6A0', track: '#7B2FBE', pdf: '#F72585', ok: '#06D6A0', warn: '#F72585', info: '#4CC9F0' };
-  list.innerHTML = logs.map(l => `<div class="log-item"><span class="log-type" style="color:${c[l.type] || '#e0e0e0'}">[${l.type.toUpperCase()}]</span> <span class="log-time">${l.time}</span> ${esc(l.message)}</div>`).join('');
+  list.innerHTML = logs.map(l => '<div class="log-item"><span class="log-type" style="color:' + (c[l.type] || '#e0e0e0') + '">[' + l.type.toUpperCase() + ']</span> <span class="log-time">' + l.time + '</span> ' + esc(l.message) + '</div>').join('');
 }
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-// ── connection ────────────────────────────────────────────────────────
+// -- connection check
 async function checkConnection() {
   const el = document.getElementById('conn-status');
   try {
@@ -531,7 +525,7 @@ async function checkConnection() {
   }
 }
 
-// ── visualizer ────────────────────────────────────────────────────────
+// -- visualizer
 function animateBars() {
   const bars = document.querySelectorAll('.bar');
   if (!bars.length) return;
