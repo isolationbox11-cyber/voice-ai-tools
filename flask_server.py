@@ -81,6 +81,7 @@ ALLOWED_ORIGINS = [
 ] + _extra_origins
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB max upload
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
@@ -319,12 +320,12 @@ def train():
     saved = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
+        # Sanitize: strip non-safe chars, then strip any directory components
         safe = re.sub(r'[^\w.\-]', '_', fname)
+        safe = Path(safe).name  # prevent path traversal
         dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
-    # If we have a real training pipeline, call it here
-    # For now: write a manifest so voice_training.py can pick it up
     manifest = {
         "samples": saved,
         "sample_dir": str(SAMPLES_DIR),
@@ -333,14 +334,19 @@ def train():
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
-    # Try to call voice_training if available
+    # Call voice_training if available — surface real errors
+    voice_id = None
     try:
         from voice_training import train_from_samples
-        train_from_samples([str(SAMPLES_DIR / s) for s in saved])
+        voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
         manifest["status"] = "trained"
+        manifest["voice_id"] = voice_id
+    except ImportError:
+        manifest["status"] = "samples_saved"
+        manifest["note"] = "voice_training.py not installed — samples saved only"
     except Exception as e:
-        manifest["status"] = f"samples_saved"
-        manifest["note"] = f"voice_training.py not wired or errored: {e}"
+        manifest["status"] = "training_failed"
+        manifest["error"] = str(e)
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
     return jsonify({"ok": True, "saved": saved, **manifest})
@@ -362,7 +368,9 @@ def _model_status():
                 "trained": True,
                 "count": m.get("count", 0),
                 "trained_at": m.get("trained_at", "unknown"),
-                "status": m.get("status", "unknown")
+                "status": m.get("status", "unknown"),
+                "voice_id": m.get("voice_id"),
+                "error": m.get("error")
             }
         except Exception:
             pass

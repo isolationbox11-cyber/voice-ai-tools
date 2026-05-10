@@ -1,344 +1,535 @@
-/* popup.js - Voice AI Tools v2.2 - safe storage fix */
+/* popup.js - Voice AI Tools v3.0 - karaoke train UI, no emoji */
 
-const DEFAULT_SERVER='http://127.0.0.1:5000';
-let serverUrl=DEFAULT_SERVER,token='',activePreset='default',logs=[];
-let mediaRecorder=null,recordedChunks=[],trainClips=[];
+const DEFAULT_SERVER = 'http://127.0.0.1:5000';
+let serverUrl = DEFAULT_SERVER, token = '', logs = [];
+let mediaRecorder = null, recordedChunks = [], isRecording = false;
+let trainClips = [null, null, null, null];
+let currentTake = 0;
+let timerInterval = null;
+let useClonedVoice = true;
 
-// Safe storage wrapper - works inside extension AND as plain HTML
-const store={
-  get(keys,cb){
-    try{
-      if(typeof chrome!=='undefined'&&chrome.storage&&chrome.storage.local){
-        chrome.storage.local.get(keys,cb);
+// -- karaoke presets
+const PRESETS = [
+  {
+    id: 'calm',
+    label: 'Calm Reading',
+    sub: 'relaxed tone',
+    moodClass: 'calm',
+    hint: 'Read this in a relaxed, even tone -- like explaining something to a friend.',
+    lines: [
+      'Today is quiet, and I am taking my time with my words.',
+      'I am not in a rush, and nothing here is urgent.',
+      'I speak clearly, but I do not push my voice.',
+      'If someone were listening, they would hear that I am calm and paying attention.'
+    ]
+  },
+  {
+    id: 'rant',
+    label: 'Mild Rant',
+    sub: 'animated tone',
+    moodClass: 'rant',
+    hint: 'Read this like you are venting to someone who already agrees with you -- not yelling, just animated.',
+    lines: [
+      'I cannot believe how much nonsense I deal with just to get basic things done.',
+      'Every time I think I have seen the last ridiculous error, another one pops up.',
+      'I start out patient, but the more I repeat myself, the sharper my tone gets.',
+      'I am not screaming, but you can hear in my voice that I am absolutely over it.'
+    ]
+  },
+  {
+    id: 'curious',
+    label: 'Curious Questions',
+    sub: 'skeptical tone',
+    moodClass: 'curious',
+    hint: 'Read this like you are honestly wondering the answer, with a little skepticism mixed in.',
+    lines: [
+      'Why does it always feel like the simple questions are the hardest to answer?',
+      'What happens if I stop pretending everything makes sense?',
+      'When I ask these things out loud, my voice tilts up just a bit at the end.',
+      'You can hear curiosity and doubt sitting right next to each other.'
+    ]
+  },
+  {
+    id: 'singing',
+    label: 'Short Song Line',
+    sub: 'sung freely',
+    moodClass: 'singing',
+    hint: 'Sing this -- whatever melody comes to you. Do not overthink it.',
+    lines: [
+      'I keep singing to this little machine,',
+      'hoping it learns what my voice really means.'
+    ]
+  }
+];
+
+// -- storage wrapper
+const store = {
+  get(keys, cb) {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(keys, cb);
       } else {
-        const res={};
-        keys.forEach(k=>{ const v=localStorage.getItem(k); if(v!==null)res[k]=v; });
+        const res = {};
+        keys.forEach(k => { const v = localStorage.getItem(k); if (v !== null) res[k] = v; });
         cb(res);
       }
-    }catch(e){ cb({}); }
+    } catch (e) { cb({}); }
   },
-  set(obj){
-    try{
-      if(typeof chrome!=='undefined'&&chrome.storage&&chrome.storage.local){
+  set(obj) {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
         chrome.storage.local.set(obj);
       } else {
-        Object.entries(obj).forEach(([k,v])=>localStorage.setItem(k,v));
+        Object.entries(obj).forEach(([k, v]) => localStorage.setItem(k, v));
       }
-    }catch(e){}
+    } catch (e) {}
   }
 };
 
-document.addEventListener('DOMContentLoaded',async()=>{
+// -- boot
+document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
-  initTabs();initVoice();initTrain();initTrack();initLog();
-  animateBars();checkConnection();
+  initTabs();
+  initVoice();
+  initTrain();
+  initTrack();
+  initLog();
+  animateBars();
+  checkConnection();
 });
 
-async function loadSettings(){
-  return new Promise(r=>store.get(['serverUrl','token'],res=>{
-    serverUrl=res.serverUrl||DEFAULT_SERVER;
-    token=res.token||'';
+async function loadSettings() {
+  return new Promise(r => store.get(['serverUrl', 'token'], res => {
+    serverUrl = res.serverUrl || DEFAULT_SERVER;
+    token = res.token || '';
     r();
   }));
 }
 
-// --- TABS
-function initTabs(){
-  document.querySelectorAll('.tab').forEach(tab=>{
-    tab.addEventListener('click',()=>{
-      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+// -- tabs
+function initTabs() {
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
       tab.classList.add('active');
-      document.getElementById('panel-'+tab.dataset.tab).classList.add('active');
+      document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
     });
   });
 }
 
-// --- VOICE
-function initVoice(){
-  const btn=document.getElementById('btn-speak');
-  // popup.html uses id="tts-text"
-  const txt=document.getElementById('tts-text');
-  const speedSel=document.getElementById('voice-speed');
-  const connStatus=document.getElementById('conn-status');
-  if(!btn)return;
+// -- voice tab
+function initVoice() {
+  const speakBtn = document.getElementById('btn-speak');
+  const clearBtn = document.getElementById('btn-clear-voice');
+  const compareBtn = document.getElementById('btn-compare');
+  const clonedBtn = document.getElementById('btn-mode-cloned');
+  const stockBtn = document.getElementById('btn-mode-stock');
+  const statusEl = document.getElementById('voice-status');
 
-  // Preset chips
-  document.querySelectorAll('.preset-chip').forEach(chip=>{
-    chip.addEventListener('click',()=>{
-      document.querySelectorAll('.preset-chip').forEach(c=>c.classList.remove('active'));
-      chip.classList.add('active');
-      activePreset=chip.dataset.preset||'default';
-    });
+  if (clonedBtn) clonedBtn.addEventListener('click', () => {
+    useClonedVoice = true;
+    clonedBtn.classList.add('active');
+    if (stockBtn) stockBtn.classList.remove('active');
+    if (statusEl) statusEl.textContent = 'Using your cloned voice';
   });
 
-  btn.addEventListener('click',async()=>{
-    const text=(txt&&txt.value||'').trim();
-    if(!text){if(connStatus)connStatus.textContent='Enter text first.';return;}
-    if(connStatus)connStatus.textContent='Speaking...';
-    btn.disabled=true;
-    try{
-      // Delegate fetch + playback to the background service worker so audio
-      // continues even if this popup closes immediately after the click.
-      const resp=await chrome.runtime.sendMessage({
-        type:'TTS_REQUEST',
-        text,
-        token,
-        serverUrl,
-        speed:speedSel?speedSel.value:'normal',
-        callType:activePreset
-      });
-      if(resp&&resp.ok){
-        if(connStatus)connStatus.textContent='\u25cf\u00a0playing';
-        addLog('voice','Spoke: '+text.substring(0,40));
-      } else {
-        if(connStatus)connStatus.textContent='Error: '+(resp&&resp.error||'unknown');
-        addLog('warn','Voice error: '+(resp&&resp.error||'unknown'));
-      }
-    }catch(e){
-      if(connStatus)connStatus.textContent='Error \u2013 Is Flask running?';
-      addLog('warn','Voice error: '+e.message);
-    }
-    btn.disabled=false;
+  if (stockBtn) stockBtn.addEventListener('click', () => {
+    useClonedVoice = false;
+    stockBtn.classList.add('active');
+    if (clonedBtn) clonedBtn.classList.remove('active');
+    if (statusEl) statusEl.textContent = 'Using stock voice';
+  });
+
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    const txt = document.getElementById('tts-text');
+    if (txt) txt.value = '';
+  });
+
+  if (speakBtn) speakBtn.addEventListener('click', () => speakText(useClonedVoice, false));
+
+  if (compareBtn) compareBtn.addEventListener('click', async () => {
+    const txt = document.getElementById('tts-text');
+    const text = txt ? txt.value.trim() : '';
+    if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
+    if (statusEl) statusEl.textContent = 'AB: playing stock...';
+    await speakText(false, true);
+    setTimeout(async () => {
+      if (statusEl) statusEl.textContent = 'AB: playing cloned...';
+      await speakText(true, true);
+      if (statusEl) statusEl.textContent = 'AB compare done.';
+    }, 2500);
   });
 }
 
-// --- TRAIN
-function initTrain(){
-  const startBtn=document.getElementById('record-btn');
-  const submitBtn=document.getElementById('btn-train');
-  const status=document.getElementById('train-status');
-  const clipsContainer=document.getElementById('train-clips');
-  if(!startBtn)return;
-
-  let isRecording=false;
-
-  startBtn.addEventListener('click',async()=>{
-    if(!isRecording){
-      try{
-        const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-        mediaRecorder=new MediaRecorder(stream);
-        recordedChunks=[];
-        mediaRecorder.ondataavailable=e=>recordedChunks.push(e.data);
-        mediaRecorder.start();
-        isRecording=true;
-        const icon=document.getElementById('record-icon');
-        const label=document.getElementById('record-label');
-        if(icon)icon.textContent='\u23f9';
-        if(label)label.textContent='Tap to stop recording';
-        startBtn.classList.add('recording');
-        if(status)status.textContent='Recording...';
-        addLog('train','Recording started');
-      }catch(e){
-        if(status)status.textContent='Mic error: '+e.message;
-        addLog('warn','Mic error: '+e.message);
-      }
+async function speakText(cloned, silent) {
+  const txt = document.getElementById('tts-text');
+  const statusEl = document.getElementById('voice-status');
+  const speakBtn = document.getElementById('btn-speak');
+  const text = txt ? txt.value.trim() : '';
+  if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
+  if (!silent && speakBtn) speakBtn.disabled = true;
+  if (statusEl && !silent) statusEl.textContent = 'Speaking...';
+  const speed = document.getElementById('voice-speed');
+  try {
+    // Delegate fetch + playback to the background service worker so audio
+    // continues even if this popup is closed immediately after clicking.
+    const resp = await chrome.runtime.sendMessage({
+      type: 'TTS_REQUEST',
+      text,
+      token,
+      serverUrl,
+      speed: speed ? speed.value : 'normal',
+      callType: cloned ? 'SCAM_DETECTED' : 'LEGITIMATE'
+    });
+    if (resp && resp.ok) {
+      if (statusEl && !silent) statusEl.textContent = 'Playing...';
+      addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
     } else {
-      if(mediaRecorder&&mediaRecorder.state==='recording'){
-        mediaRecorder.stop();
-        mediaRecorder.onstop=()=>{
-          const blob=new Blob(recordedChunks,{type:'audio/webm'});
-          trainClips.push(blob);
-          if(status)status.textContent='Clip saved ('+trainClips.length+' total). Record more or submit.';
-          addLog('train','Clip '+trainClips.length+' saved');
-          renderClips(clipsContainer);
-        };
-        isRecording=false;
-        const icon=document.getElementById('record-icon');
-        const label=document.getElementById('record-label');
-        if(icon)icon.textContent='\u{1F3A7}';
-        if(label)label.textContent='Tap to start recording';
-        startBtn.classList.remove('recording');
+      if (statusEl) statusEl.textContent = 'Error: ' + (resp && resp.error || 'unknown');
+      addLog('warn', 'Voice error: ' + (resp && resp.error || 'unknown'));
+    }
+  } catch (e) {
+    if (statusEl) statusEl.textContent = 'Error -- is Flask running?';
+    addLog('warn', 'Voice error: ' + e.message);
+  }
+  if (!silent && speakBtn) speakBtn.disabled = false;
+}
+
+// -- train tab (karaoke)
+function initTrain() {
+  const recordBtn = document.getElementById('record-btn');
+  const trainBtn = document.getElementById('btn-train');
+  const clearBtn = document.getElementById('btn-clear-clips');
+  const checkBtn = document.getElementById('btn-check-model');
+  const prevBtn = document.getElementById('btn-prev-take');
+  const nextBtn = document.getElementById('btn-next-take');
+  const redoBtn = document.getElementById('btn-redo-take');
+
+  if (!recordBtn) return;
+
+  renderKaraokeStep(currentTake);
+
+  recordBtn.addEventListener('click', () => {
+    if (isRecording) stopRecording(); else startRecording();
+  });
+
+  if (prevBtn) prevBtn.addEventListener('click', () => {
+    if (currentTake > 0) { currentTake--; renderKaraokeStep(currentTake); }
+  });
+
+  if (nextBtn) nextBtn.addEventListener('click', () => {
+    if (currentTake < PRESETS.length - 1) { currentTake++; renderKaraokeStep(currentTake); }
+  });
+
+  if (redoBtn) redoBtn.addEventListener('click', () => {
+    trainClips[currentTake] = null;
+    updateTrainBtn();
+    renderKaraokeStep(currentTake);
+    const status = document.getElementById('train-status');
+    if (status) status.textContent = 'Take ' + (currentTake + 1) + ' cleared. Record again.';
+  });
+
+  if (trainBtn) trainBtn.addEventListener('click', submitTraining);
+
+  if (clearBtn) clearBtn.addEventListener('click', () => {
+    trainClips = [null, null, null, null];
+    currentTake = 0;
+    renderKaraokeStep(0);
+    updateTrainBtn();
+    const status = document.getElementById('train-status');
+    if (status) status.textContent = 'Reset. Record all 4 takes again.';
+  });
+
+  if (checkBtn) checkBtn.addEventListener('click', async () => {
+    const status = document.getElementById('train-status');
+    try {
+      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Token': token } });
+      const d = await r.json();
+      const idEl = document.getElementById('trained-voice-id');
+      if (d.trained) {
+        if (status) status.textContent = 'Model: ' + (d.status || 'trained') + ' / ' + (d.count || '?') + ' clips / ' + (d.trained_at || '');
+        if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
+        if (d.error && status) status.textContent += ' -- ' + d.error;
+      } else {
+        if (status) status.textContent = 'No model trained yet.';
+        if (idEl) idEl.style.display = 'none';
       }
+    } catch (e) {
+      const status = document.getElementById('train-status');
+      if (status) status.textContent = 'Could not reach server.';
+    }
+  });
+}
+
+function renderKaraokeStep(step) {
+  const p = PRESETS[step];
+  const moodEl = document.getElementById('karaoke-mood');
+  const labelEl = document.getElementById('karaoke-mood-label');
+  const subEl = document.getElementById('karaoke-take-sub');
+  const hintEl = document.getElementById('karaoke-hint');
+  const scriptEl = document.getElementById('karaoke-script');
+  const recordLabel = document.getElementById('record-label');
+
+  if (moodEl) moodEl.className = 'karaoke-mood ' + p.moodClass;
+  if (labelEl) labelEl.textContent = p.label;
+  if (subEl) subEl.textContent = p.sub;
+  if (hintEl) hintEl.textContent = p.hint;
+
+  if (scriptEl) {
+    scriptEl.innerHTML = p.lines.map((line, i) =>
+      '<span class="kline" data-line="' + i + '">' + esc(line) + '</span>'
+    ).join('<br>');
+  }
+
+  if (recordLabel) {
+    recordLabel.textContent = trainClips[step]
+      ? 'Take ' + (step + 1) + ' recorded -- tap to re-record'
+      : 'Tap to record take ' + (step + 1) + ' of ' + PRESETS.length;
+  }
+
+  document.querySelectorAll('.step-dot').forEach((dot, i) => {
+    dot.classList.remove('active', 'done');
+    if (i < step) dot.classList.add('done');
+    else if (i === step) dot.classList.add('active');
+  });
+}
+
+function startRecording() {
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+    recordedChunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+      const file = new File([blob], 'take_' + currentTake + '_' + PRESETS[currentTake].id + '.webm', { type: 'audio/webm' });
+      trainClips[currentTake] = file;
+      updateTrainBtn();
+      const label = document.getElementById('record-label');
+      if (label) label.textContent = 'Take ' + (currentTake + 1) + ' saved.';
+      const done = trainClips.filter(Boolean).length;
+      const status = document.getElementById('train-status');
+      if (status) status.textContent = done + ' of ' + PRESETS.length + ' takes recorded.';
+      addLog('train', 'Take ' + (currentTake + 1) + ' saved: ' + PRESETS[currentTake].label);
+      stream.getTracks().forEach(t => t.stop());
+      if (currentTake < PRESETS.length - 1) {
+        setTimeout(() => { currentTake++; renderKaraokeStep(currentTake); }, 600);
+      }
+    };
+    mediaRecorder.start();
+    isRecording = true;
+    const ring = document.getElementById('record-btn');
+    const icon = document.getElementById('record-icon');
+    if (ring) ring.classList.add('recording');
+    if (icon) icon.textContent = 'STOP';
+    const label = document.getElementById('record-label');
+    if (label) label.textContent = 'Recording -- tap to stop';
+    startTimer();
+    highlightLines();
+  }).catch(e => {
+    const status = document.getElementById('train-status');
+    if (status) status.textContent = 'Mic error: ' + e.message;
+    addLog('warn', 'Mic error: ' + e.message);
+  });
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  isRecording = false;
+  const ring = document.getElementById('record-btn');
+  const icon = document.getElementById('record-icon');
+  if (ring) ring.classList.remove('recording');
+  if (icon) icon.textContent = 'REC';
+  stopTimer();
+  clearLineHighlight();
+}
+
+let lineInterval = null;
+function highlightLines() {
+  const p = PRESETS[currentTake];
+  let li = 0;
+  clearLineHighlight();
+  const lines = document.querySelectorAll('.kline');
+  if (lines[0]) lines[0].classList.add('active');
+  const perLine = Math.max(2000, Math.floor(20000 / p.lines.length));
+  lineInterval = setInterval(() => {
+    document.querySelectorAll('.kline').forEach(l => l.classList.remove('active'));
+    if (li < lines.length) lines[li].classList.add('done');
+    li++;
+    if (li < lines.length) lines[li].classList.add('active');
+    else clearLineHighlight();
+  }, perLine);
+}
+
+function clearLineHighlight() {
+  if (lineInterval) { clearInterval(lineInterval); lineInterval = null; }
+}
+
+let seconds = 0;
+function startTimer() {
+  seconds = 0;
+  const el = document.getElementById('record-timer');
+  if (el) el.textContent = '0:00';
+  timerInterval = setInterval(() => {
+    seconds++;
+    const m = Math.floor(seconds / 60);
+    const s = String(seconds % 60).padStart(2, '0');
+    if (el) el.textContent = m + ':' + s;
+  }, 1000);
+}
+
+function stopTimer() {
+  clearInterval(timerInterval);
+  const el = document.getElementById('record-timer');
+  if (el) el.textContent = '';
+}
+
+function updateTrainBtn() {
+  const btn = document.getElementById('btn-train');
+  const done = trainClips.filter(Boolean).length;
+  if (!btn) return;
+  btn.textContent = 'TRAIN MY VOICE (' + done + '/' + PRESETS.length + ')';
+  btn.disabled = done === 0;
+  if (done === PRESETS.length) {
+    btn.style.background = 'linear-gradient(135deg,#06D6A0,#4CC9F0)';
+    const status = document.getElementById('train-status');
+    if (status) status.textContent = 'All takes recorded. Press Train My Voice.';
+  }
+}
+
+async function submitTraining() {
+  const status = document.getElementById('train-status');
+  const trainBtn = document.getElementById('btn-train');
+  const clips = trainClips.filter(Boolean);
+  if (!clips.length) { if (status) status.textContent = 'No clips recorded yet.'; return; }
+  if (status) status.textContent = 'Uploading ' + clips.length + ' clip(s) and training...';
+  if (trainBtn) { trainBtn.disabled = true; trainBtn.textContent = 'TRAINING...'; }
+  const fd = new FormData();
+  clips.forEach(f => fd.append('files', f, f.name));
+  try {
+    const r = await fetch(serverUrl + '/train', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const d = await r.json();
+    const idEl = document.getElementById('trained-voice-id');
+    if (d.ok) {
+      if (status) status.textContent = d.status === 'trained'
+        ? 'Voice trained. ID: ' + (d.voice_id || 'saved')
+        : (d.note || d.status || 'Samples saved.');
+      if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
+      if (d.error && status) status.textContent += ' -- ' + d.error;
+      addLog('train', 'Training result: ' + (d.status || 'ok') + ' / ' + (d.voice_id || ''));
+    } else {
+      if (status) status.textContent = 'Training failed: ' + (d.error || 'unknown error');
+      addLog('warn', 'Training failed: ' + (d.error || 'unknown'));
+    }
+  } catch (e) {
+    if (status) status.textContent = 'Upload error -- is Flask running?';
+    addLog('warn', 'Train upload error: ' + e.message);
+  }
+  if (trainBtn) { trainBtn.disabled = false; updateTrainBtn(); }
+}
+
+// -- track tab
+function initTrack() {
+  const scanBtn = document.getElementById('btn-track');
+  const pdfDrop = document.getElementById('pdf-drop');
+  const pdfInput = document.getElementById('pdf-file');
+  const ipInput = document.getElementById('track-ip');
+  const trackBox = document.getElementById('track-result');
+  const pdfBox = document.getElementById('pdf-result');
+
+  if (scanBtn) scanBtn.addEventListener('click', async () => {
+    const ip = ipInput ? ipInput.value.trim() : '';
+    if (!ip) { if (trackBox) trackBox.textContent = 'Enter an IP or domain.'; return; }
+    if (trackBox) trackBox.textContent = 'Scanning...';
+    try {
+      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Token': token } });
+      const d = await r.json();
+      if (d.error) { if (trackBox) trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
+      const lines = ['IP: ' + d.ip_str, 'Org: ' + (d.org || 'N/A'), 'Country: ' + (d.country_name || 'N/A')];
+      if (d.ports && d.ports.length) lines.push('Ports: ' + d.ports.join(', '));
+      if (d.vulns && Object.keys(d.vulns).length) lines.push('Vulns: ' + Object.keys(d.vulns).join(', '));
+      if (trackBox) trackBox.textContent = lines.join('\n');
+      addLog('track', 'Scanned: ' + ip);
+    } catch (e) {
+      if (trackBox) trackBox.textContent = 'Scan failed. Is Flask running?';
+      addLog('warn', 'Scan error: ' + e.message);
     }
   });
 
-  // Audio file drop/upload
-  const audioDrop=document.getElementById('audio-drop');
-  const audioFile=document.getElementById('audio-file');
-  if(audioDrop){
-    audioDrop.addEventListener('click',()=>audioFile&&audioFile.click());
-    audioDrop.addEventListener('dragover',e=>{e.preventDefault();audioDrop.classList.add('dragover');});
-    audioDrop.addEventListener('dragleave',()=>audioDrop.classList.remove('dragover'));
-    audioDrop.addEventListener('drop',e=>{
-      e.preventDefault();audioDrop.classList.remove('dragover');
-      const files=Array.from(e.dataTransfer.files).filter(f=>f.type.startsWith('audio/'));
-      files.forEach(f=>trainClips.push(f));
-      if(status)status.textContent=trainClips.length+' clip(s) ready.';
-      renderClips(clipsContainer);
-    });
+  if (pdfDrop) {
+    pdfDrop.addEventListener('click', () => { if (pdfInput) pdfInput.click(); });
+    pdfDrop.addEventListener('dragover', e => { e.preventDefault(); pdfDrop.classList.add('dragover'); });
+    pdfDrop.addEventListener('dragleave', () => pdfDrop.classList.remove('dragover'));
+    pdfDrop.addEventListener('drop', e => { e.preventDefault(); pdfDrop.classList.remove('dragover'); const f = e.dataTransfer.files[0]; if (f) analyzePDF(f, pdfBox); });
   }
-  if(audioFile){
-    audioFile.addEventListener('change',()=>{
-      Array.from(audioFile.files).forEach(f=>trainClips.push(f));
-      if(status)status.textContent=trainClips.length+' clip(s) ready.';
-      renderClips(clipsContainer);
-      audioFile.value='';
-    });
-  }
+  if (pdfInput) pdfInput.addEventListener('change', () => { const f = pdfInput.files[0]; if (f) analyzePDF(f, pdfBox); });
+}
 
-  if(submitBtn){
-    submitBtn.addEventListener('click',async()=>{
-      if(!trainClips.length){if(status)status.textContent='Record at least one clip first.';return;}
-      if(status)status.textContent='Uploading '+trainClips.length+' clip(s)...';
-      submitBtn.disabled=true;
-      let ok=0;
-      for(let i=0;i<trainClips.length;i++){
-        const fd=new FormData();
-        fd.append('files',trainClips[i],'clip_'+i+'.webm');
-        try{
-          const r=await fetch(serverUrl+'/train',{method:'POST',
-            headers:{'X-Token':token},body:fd});
-          const d=await r.json();
-          if(d.ok)ok++;
-        }catch(e){ addLog('warn','Upload error clip '+i+': '+e.message); }
-      }
-      if(status)status.textContent=ok+'/'+trainClips.length+' clips uploaded.';
-      addLog('train','Submitted '+ok+' clips');
-      trainClips=[];
-      renderClips(clipsContainer);
-      submitBtn.disabled=false;
-    });
-  }
-
-  const clearBtn=document.getElementById('btn-clear-clips');
-  if(clearBtn){
-    clearBtn.addEventListener('click',()=>{
-      trainClips=[];
-      renderClips(clipsContainer);
-      if(status)status.textContent='Clips cleared.';
-    });
-  }
-
-  const checkBtn=document.getElementById('btn-check-model');
-  if(checkBtn){
-    checkBtn.addEventListener('click',async()=>{
-      try{
-        const r=await fetch(serverUrl+'/model_status',{headers:{'X-Token':token}});
-        const d=await r.json();
-        if(status)status.textContent=d.trained?'Model ready ('+d.count+' samples, trained '+d.trained_at+')':'No model trained yet.';
-      }catch(e){
-        if(status)status.textContent='Could not check model status.';
-      }
-    });
+async function analyzePDF(f, box) {
+  if (box) box.textContent = 'Analyzing: ' + f.name + '...';
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const r = await fetch(serverUrl + '/analyze_pdf', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const d = await r.json();
+    if (d.error) { if (box) box.textContent = 'Error: ' + d.error; addLog('warn', 'PDF: ' + d.error); return; }
+    const lines = ['PDF: ' + f.name, 'Pages: ' + (d.pages || '?')];
+    if (d.metadata) Object.entries(d.metadata).forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
+    if (d.links && d.links.length) { lines.push('', 'Links (' + d.links.length + '):'); d.links.slice(0, 10).forEach(l => lines.push('  ' + l)); }
+    if (d.ips && d.ips.length) { lines.push('', 'Embedded IPs:'); d.ips.forEach(i => lines.push('  ' + i)); }
+    if (d.suspicious) lines.push('', 'WARNING: SUSPICIOUS CONTENT DETECTED');
+    if (box) box.textContent = lines.join('\n');
+    addLog('ok', 'PDF done: ' + f.name);
+  } catch (e) {
+    if (box) box.textContent = 'PDF failed. Is Flask running?';
+    addLog('warn', 'PDF error: ' + e.message);
   }
 }
 
-function renderClips(container){
-  if(!container)return;
-  if(!trainClips.length){container.innerHTML='<div style="font-size:.72rem;color:rgba(224,224,224,.25);text-align:center;padding:10px 0">No clips yet</div>';return;}
-  container.innerHTML=trainClips.map((_,i)=>`<div class="clip-item"><span style="flex:1">Clip ${i+1}</span><span class="clip-del" data-i="${i}">\u2715</span></div>`).join('');
-  container.querySelectorAll('.clip-del').forEach(el=>{
-    el.addEventListener('click',()=>{
-      trainClips.splice(parseInt(el.dataset.i),1);
-      renderClips(container);
-    });
+// -- log tab
+function initLog() {
+  const clearBtn = document.getElementById('btn-clear-log');
+  if (!clearBtn) return;
+  clearBtn.addEventListener('click', () => {
+    logs = []; renderLog();
+    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
   });
 }
 
-// --- TRACK
-function initTrack(){
-  const scanBtn=document.getElementById('btn-track');
-  const ipInput=document.getElementById('track-ip');
-  const trackBox=document.getElementById('track-result');
-  const pdfDrop=document.getElementById('pdf-drop');
-  const pdfInput=document.getElementById('pdf-file');
-  const pdfBox=document.getElementById('pdf-result');
-  if(!scanBtn)return;
-
-  scanBtn.addEventListener('click',async()=>{
-    const ip=(ipInput&&ipInput.value||'').trim();
-    if(!ip){if(trackBox)trackBox.textContent='Enter an IP.';return;}
-    if(trackBox)trackBox.textContent='Scanning...';
-    try{
-      // GET /shodan?ip=...
-      const r=await fetch(serverUrl+'/shodan?ip='+encodeURIComponent(ip),{
-        headers:{'X-Token':token}});
-      const d=await r.json();
-      const lines=['IP: '+(d.ip_str||ip),'Org: '+(d.org||'N/A'),'Country: '+(d.country_name||'N/A')];
-      if(d.ports&&d.ports.length)lines.push('Ports: '+d.ports.join(', '));
-      if(trackBox)trackBox.textContent=lines.join('\n');
-      addLog('track','Scanned IP: '+ip);
-    }catch(e){
-      if(trackBox)trackBox.textContent='Scan failed. Is Flask running?';
-      addLog('warn','Scan error: '+e.message);
-    }
-  });
-
-  if(pdfDrop&&pdfInput){
-    pdfDrop.addEventListener('click',()=>pdfInput.click());
-    pdfDrop.addEventListener('dragover',e=>{e.preventDefault();pdfDrop.classList.add('dragover');});
-    pdfDrop.addEventListener('dragleave',()=>pdfDrop.classList.remove('dragover'));
-    pdfDrop.addEventListener('drop',e=>{e.preventDefault();pdfDrop.classList.remove('dragover');if(e.dataTransfer.files[0])handlePdf(e.dataTransfer.files[0],pdfBox);});
-    pdfInput.addEventListener('change',()=>{if(pdfInput.files[0])handlePdf(pdfInput.files[0],pdfBox);});
-  }
-}
-
-async function handlePdf(file,box){
-  if(box)box.textContent='Analyzing PDF: '+file.name+'...';
-  const fd=new FormData();
-  fd.append('file',file);
-  try{
-    const r=await fetch(serverUrl+'/analyze_pdf',{method:'POST',
-      headers:{'X-Token':token},body:fd});
-    const d=await r.json();
-    const lines=['PDF: '+file.name,'Pages: '+(d.pages||'?')];
-    if(d.metadata)Object.entries(d.metadata).forEach(([k,v])=>lines.push('  '+k+': '+v));
-    if(d.links&&d.links.length){lines.push('','Links ('+d.links.length+'):');d.links.forEach(l=>lines.push(' '+l));}
-    if(d.ips&&d.ips.length){lines.push('','Embedded IPs:');d.ips.forEach(i=>lines.push(' '+i));}
-    if(d.suspicious)lines.push('','\u26A0 SUSPICIOUS CONTENT DETECTED');
-    if(box)box.textContent=lines.join('\n');
-    addLog('ok','PDF done: '+file.name);
-  }catch{if(box)box.textContent='PDF analysis failed. Is Flask running?';addLog('warn','PDF failed');}
-}
-
-// --- LOG MODE
-function initLog(){
-  const clearBtn=document.getElementById('btn-clear-log');
-  if(clearBtn)clearBtn.addEventListener('click',()=>{
-    logs=[];renderLog();
-    fetch(serverUrl+'/log',{method:'POST',headers:{'Content-Type':'application/json','X-Token':token},body:JSON.stringify({action:'clear'})}).catch(()=>{});
-  });
-}
-
-function addLog(type,message){
-  const e={type,message,time:new Date().toLocaleTimeString()};
-  logs.unshift(e);if(logs.length>200)logs.pop();
-  fetch(serverUrl+'/log',{method:'POST',headers:{'Content-Type':'application/json','X-Token':token},body:JSON.stringify({...e,time:Date.now()})}).catch(()=>{});
+function addLog(type, message) {
+  const e = { type, message, time: new Date().toLocaleTimeString() };
+  logs.unshift(e); if (logs.length > 200) logs.pop();
+  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
   renderLog();
 }
 
-function renderLog(){
-  const list=document.getElementById('log-list');
-  if(!list)return;
-  if(!logs.length){list.innerHTML='<div class="log-empty">No activity logged yet.</div>';return;}
-  const c={voice:'#4CC9F0',train:'#06D6A0',track:'#7B2FBE',pdf:'#F72585',ok:'#06D6A0',warn:'#F72585',info:'#4CC9F0'};
-  list.innerHTML=logs.map(l=>`<div class="log-item"><span class="log-type" style="color:${c[l.type]||'#e0e0e0'}">[${l.type.toUpperCase()}]</span> <span class="log-time">${l.time}</span> ${esc(l.message)}</div>`).join('');
+function renderLog() {
+  const list = document.getElementById('log-list');
+  if (!list) return;
+  if (!logs.length) { list.innerHTML = '<div class="log-empty">No activity logged yet.</div>'; return; }
+  const c = { voice: '#4CC9F0', train: '#06D6A0', track: '#7B2FBE', pdf: '#F72585', ok: '#06D6A0', warn: '#F72585', info: '#4CC9F0' };
+  list.innerHTML = logs.map(l => '<div class="log-item"><span class="log-type" style="color:' + (c[l.type] || '#e0e0e0') + '">[' + l.type.toUpperCase() + ']</span> <span class="log-time">' + l.time + '</span> ' + esc(l.message) + '</div>').join('');
 }
 
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-async function checkConnection(){
-  const dot=document.getElementById('status-dot');
-  const label=document.getElementById('conn-status');
-  if(!dot)return;
-  try{
-    // Use /health (not /status) – the Flask server exposes /health
-    const r=await fetch(serverUrl+'/health',{headers:{'X-Token':token}});
-    if(r.ok){dot.style.background='#06D6A0';if(label)label.textContent='\u25cf connected';}
-    else{dot.style.background='#F72585';if(label)label.textContent='Server Error';}
-  }catch{
-    dot.style.background='#888';if(label)label.textContent='Offline';
+// -- connection check
+async function checkConnection() {
+  const el = document.getElementById('conn-status');
+  try {
+    const r = await fetch(serverUrl + '/health', { headers: { 'X-Token': token } });
+    if (el) el.style.color = r.ok ? '#06D6A0' : '#F72585';
+  } catch {
+    if (el) el.style.color = '#888';
   }
 }
 
-function animateBars(){
-  const bars=document.querySelectorAll('.bar');
-  if(!bars.length)return;
-  setInterval(()=>{
-    bars.forEach(b=>{
-      const h=Math.floor(Math.random()*80)+10;
-      b.style.height=h+'%';
-    });
-  },200);
+// -- visualizer
+function animateBars() {
+  const bars = document.querySelectorAll('.bar');
+  if (!bars.length) return;
+  const interval = setInterval(() => {
+    if (!document.body) return clearInterval(interval);
+    bars.forEach(b => { b.style.height = (Math.floor(Math.random() * 80) + 10) + '%'; });
+  }, 200);
 }
