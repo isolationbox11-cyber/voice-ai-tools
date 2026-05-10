@@ -22,7 +22,7 @@ chrome.runtime.onMessage.addListener((message) => {
     // Stop any existing playback and free its resources first.
     _cleanup();
 
-    const blob = new Blob([message.audioData], { type: "audio/wav" });
+    const blob = new Blob([message.audioData], { type: message.mimeType || "audio/wav" });
     const blobUrl = URL.createObjectURL(blob);
     _currentBlobUrl = blobUrl;
 

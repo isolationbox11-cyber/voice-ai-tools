@@ -36,14 +36,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             throw new Error(j.error || `HTTP ${resp.status}`);
           });
         }
-        return resp.arrayBuffer();
+        // Capture Content-Type before consuming body so offscreen can build
+        // the Blob with the correct MIME type (Gemini may return audio/mp3,
+        // audio/ogg, etc. rather than always audio/wav).
+        // Strip any parameters (e.g. "; charset=utf-8") – Blob only wants the
+        // base type.
+        const rawType = resp.headers.get("Content-Type") || "audio/wav";
+        const mimeType = rawType.split(";")[0].trim() || "audio/wav";
+        return resp.arrayBuffer().then((buf) => ({ buf, mimeType }));
       })
-      .then((audioData) => {
+      .then(({ buf: audioData, mimeType }) => {
         // Forward raw bytes to offscreen – blob URL is created there so it
         // outlives the popup document that initiated the request.
         chrome.runtime.sendMessage({
           type: "PLAY_AUDIO_OFFSCREEN",
           audioData,
+          mimeType,
         });
         sendResponse({ ok: true });
       })
