@@ -1,0 +1,450 @@
+"""
+Tests for flask_server.py – covers changes introduced in this PR:
+  - Token header renamed from X-Token → X-Voice-Token
+  - _check_token() logic (no-token dev mode, correct/wrong token)
+  - _resolve_voice_settings() (custom_voice_config absent/present, voice_id injection)
+  - /health endpoint (GET → 200 {"status": "ok"})
+  - /tts endpoint (auth, validation, synthesis success/failure)
+"""
+
+import importlib
+import sys
+import types
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers – we need to stub heavy deps before importing flask_server
+# ---------------------------------------------------------------------------
+
+def _make_tts_stub(audio_bytes=b"FAKE_AUDIO", mime_type="audio/wav", error=None, effective_text="hello"):
+    """Return a fake synthesize_speech function."""
+    def _synthesize(text, voice_settings, **kwargs):
+        return audio_bytes, mime_type, error, effective_text
+    return _synthesize
+
+
+def _make_voice_config_stub(return_value=None):
+    """Return a fake get_voice_for_context function."""
+    if return_value is None:
+        return_value = {"emotion": "professional", "speaking_rate": 1.0}
+
+    def _get_voice(call_type):
+        return dict(return_value)
+    return _get_voice
+
+
+@pytest.fixture(autouse=True)
+def _patch_imports(monkeypatch):
+    """Stub tts_engine and voice_config before importing flask_server."""
+    # Build fake tts_engine module
+    tts_mod = types.ModuleType("tts_engine")
+    tts_mod.synthesize_speech = _make_tts_stub()
+    monkeypatch.setitem(sys.modules, "tts_engine", tts_mod)
+
+    # Build fake voice_config module
+    vc_mod = types.ModuleType("voice_config")
+    vc_mod.get_voice_for_context = _make_voice_config_stub()
+    monkeypatch.setitem(sys.modules, "voice_config", vc_mod)
+
+    # Ensure custom_voice_config is NOT present by default
+    monkeypatch.delitem(sys.modules, "custom_voice_config", raising=False)
+
+    yield
+
+
+@pytest.fixture()
+def _reload_server(monkeypatch):
+    """
+    Reload flask_server after env/module patches so that module-level
+    VOICE_SERVER_TOKEN is re-read from the environment.
+    """
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+    import flask_server as srv
+    yield srv
+    # Clean up so next test starts fresh
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
+# ---------------------------------------------------------------------------
+# Fixture: Flask test client with no token configured (development mode)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def client_no_token(monkeypatch):
+    monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+    import flask_server as srv
+    srv.app.config["TESTING"] = True
+    with srv.app.test_client() as c:
+        yield c
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
+@pytest.fixture()
+def client_with_token(monkeypatch):
+    monkeypatch.setenv("VOICE_SERVER_TOKEN", "secret123")
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+    import flask_server as srv
+    srv.VOICE_SERVER_TOKEN = "secret123"
+    srv.app.config["TESTING"] = True
+    with srv.app.test_client() as c:
+        yield c, srv
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
+# ===========================================================================
+# _check_token()
+# ===========================================================================
+
+class TestCheckToken:
+    def test_no_token_configured_always_passes(self, client_no_token):
+        """When VOICE_SERVER_TOKEN is empty, every request is accepted."""
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        with srv.app.test_request_context("/tts", headers={}):
+            assert srv._check_token() is True
+
+    def test_correct_token_passes(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "mysecret"
+        with srv.app.test_request_context("/tts", headers={"X-Voice-Token": "mysecret"}):
+            assert srv._check_token() is True
+
+    def test_wrong_token_fails(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "mysecret"
+        with srv.app.test_request_context("/tts", headers={"X-Voice-Token": "wrongtoken"}):
+            assert srv._check_token() is False
+
+    def test_missing_header_fails_when_token_set(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "mysecret"
+        with srv.app.test_request_context("/tts", headers={}):
+            assert srv._check_token() is False
+
+    def test_old_x_token_header_rejected(self, monkeypatch):
+        """Ensure the old X-Token header (pre-PR) is no longer accepted."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "mysecret"
+        # X-Token (old name) should NOT work; only X-Voice-Token is valid.
+        with srv.app.test_request_context("/tts", headers={"X-Token": "mysecret"}):
+            assert srv._check_token() is False
+
+
+# ===========================================================================
+# _resolve_voice_settings()
+# ===========================================================================
+
+class TestResolveVoiceSettings:
+    def test_falls_back_to_voice_config_when_no_custom_module(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        monkeypatch.delitem(sys.modules, "custom_voice_config", raising=False)
+        import flask_server as srv
+
+        result = srv._resolve_voice_settings("LEGITIMATE")
+        # Must include the fallback voice_id
+        assert "voice_id" in result
+        assert result["voice_id"] == "en-US-Studio-O"
+
+    def test_fallback_sets_default_voice_id_for_scam(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        monkeypatch.delitem(sys.modules, "custom_voice_config", raising=False)
+        import flask_server as srv
+
+        result = srv._resolve_voice_settings("SCAM_DETECTED")
+        assert result["voice_id"] == "en-US-Studio-O"
+
+    def test_uses_custom_voice_config_when_available(self, monkeypatch):
+        custom_mod = types.ModuleType("custom_voice_config")
+        custom_mod.CUSTOM_VOICE_ID = "custom-voice-abc"
+        custom_mod.get_custom_voice_settings = lambda ct: {"voice_id": "custom-voice-abc", "emotion": "calm"}
+        monkeypatch.setitem(sys.modules, "custom_voice_config", custom_mod)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        result = srv._resolve_voice_settings("LEGITIMATE")
+        assert result["voice_id"] == "custom-voice-abc"
+        assert result["emotion"] == "calm"
+
+    def test_custom_voice_config_without_voice_id_injects_custom_voice_id(self, monkeypatch):
+        """When custom settings omit voice_id, CUSTOM_VOICE_ID attribute is injected."""
+        custom_mod = types.ModuleType("custom_voice_config")
+        custom_mod.CUSTOM_VOICE_ID = "injected-voice"
+        custom_mod.get_custom_voice_settings = lambda ct: {"emotion": "firm"}  # no voice_id
+        monkeypatch.setitem(sys.modules, "custom_voice_config", custom_mod)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        result = srv._resolve_voice_settings("SCAM_DETECTED")
+        assert result["voice_id"] == "injected-voice"
+
+    def test_custom_voice_config_missing_custom_voice_id_attr_uses_fallback_id(self, monkeypatch):
+        """If custom module has no CUSTOM_VOICE_ID, fallback string is used."""
+        custom_mod = types.ModuleType("custom_voice_config")
+        # No CUSTOM_VOICE_ID attribute
+        custom_mod.get_custom_voice_settings = lambda ct: {}
+        monkeypatch.setitem(sys.modules, "custom_voice_config", custom_mod)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        result = srv._resolve_voice_settings("LEGITIMATE")
+        assert result["voice_id"] == "en-US-Studio-O"
+
+
+# ===========================================================================
+# GET /health
+# ===========================================================================
+
+class TestHealthEndpoint:
+    def test_returns_200_ok(self, client_no_token):
+        response = client_no_token.get("/health")
+        assert response.status_code == 200
+
+    def test_returns_json_status_ok(self, client_no_token):
+        response = client_no_token.get("/health")
+        data = response.get_json()
+        assert data == {"status": "ok"}
+
+    def test_content_type_json(self, client_no_token):
+        response = client_no_token.get("/health")
+        assert "application/json" in response.content_type
+
+
+# ===========================================================================
+# POST /tts
+# ===========================================================================
+
+class TestTtsEndpoint:
+    # ── Authentication ──────────────────────────────────────────────────────
+
+    def test_no_token_configured_accepts_request(self, monkeypatch):
+        """Dev mode: no token set → all requests accepted."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            # May succeed (200) or fail on tts engine, but NOT 401
+            assert resp.status_code != 401
+
+    def test_missing_token_header_returns_401(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "secret"
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 401
+
+    def test_wrong_token_returns_401(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "secret"
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"},
+                          headers={"X-Voice-Token": "wrong"})
+            assert resp.status_code == 401
+
+    def test_correct_token_proceeds_past_auth(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "secret"
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"},
+                          headers={"X-Voice-Token": "secret"})
+            assert resp.status_code != 401
+
+    # ── Request validation ───────────────────────────────────────────────────
+
+    def test_non_json_body_returns_400(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", data="not json",
+                          content_type="text/plain")
+            assert resp.status_code == 400
+            assert "error" in resp.get_json()
+
+    def test_empty_json_object_returns_400(self, monkeypatch):
+        """An empty JSON object {} is falsy; server rejects it as invalid body."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={})
+            assert resp.status_code == 400
+            # Empty dict is falsy → "Invalid JSON body" (not "text is required")
+            assert "error" in resp.get_json()
+
+    def test_explicit_empty_text_returns_400(self, monkeypatch):
+        """Sending {"text": ""} should return 400 with 'text is required'."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": ""})
+            assert resp.status_code == 400
+            assert resp.get_json()["error"] == "text is required"
+
+    def test_whitespace_only_text_returns_400(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "   "})
+            assert resp.status_code == 400
+
+    def test_text_at_max_length_accepted(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub()
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "a" * 2000})
+            assert resp.status_code == 200
+
+    def test_text_exceeding_max_length_returns_400(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "a" * 2001})
+            assert resp.status_code == 400
+            assert "maximum length" in resp.get_json()["error"]
+
+    # ── call_type handling ───────────────────────────────────────────────────
+
+    def test_call_type_defaults_to_legitimate(self, monkeypatch):
+        """When call_type is absent, LEGITIMATE is used (no error)."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub()
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 200
+
+    def test_call_type_gets_uppercased(self, monkeypatch):
+        """call_type in lowercase is uppercased before resolution."""
+        captured = {}
+
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub()
+        vc_mod = sys.modules["voice_config"]
+        original_fn = vc_mod.get_voice_for_context
+
+        def recording_fn(call_type):
+            captured["call_type"] = call_type
+            return original_fn(call_type)
+
+        vc_mod.get_voice_for_context = recording_fn
+
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            c.post("/tts", json={"text": "hello", "call_type": "scam_detected"})
+        assert captured.get("call_type") == "SCAM_DETECTED"
+
+    # ── TTS synthesis results ────────────────────────────────────────────────
+
+    def test_tts_success_returns_audio_bytes(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=b"\x00\xFF\x00\xFF",
+                                                   mime_type="audio/wav")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 200
+            assert resp.data == b"\x00\xFF\x00\xFF"
+
+    def test_tts_success_returns_correct_mimetype(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(mime_type="audio/wav")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 200
+            assert "audio/wav" in resp.content_type
+
+    def test_tts_engine_error_returns_502(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="API key missing")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 502
+            assert "error" in resp.get_json()
+
+    def test_tts_engine_error_message_propagated(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="Quota exceeded")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.get_json()["error"] == "Quota exceeded"
+
+    # ── Boundary / regression ────────────────────────────────────────────────
+
+    def test_json_array_body_returns_400(self, monkeypatch):
+        """Body must be a JSON *object*, not an array."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json=["text", "hello"])
+            assert resp.status_code == 400
+
+    def test_x_voice_token_header_name_is_correct(self, monkeypatch):
+        """Regression: X-Voice-Token must be the accepted header (not X-Token)."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub()
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = "token99"
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            # Old header name should fail
+            resp_old = c.post("/tts", json={"text": "hi"},
+                              headers={"X-Token": "token99"})
+            assert resp_old.status_code == 401
+            # New header name should succeed
+            resp_new = c.post("/tts", json={"text": "hi"},
+                              headers={"X-Voice-Token": "token99"})
+            assert resp_new.status_code == 200
