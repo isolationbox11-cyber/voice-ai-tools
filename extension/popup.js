@@ -172,24 +172,23 @@ async function speakText(cloned, silent) {
   if (statusEl && !silent) statusEl.textContent = 'Speaking...';
   const speed = document.getElementById('voice-speed');
   try {
-    const r = await fetch(serverUrl + '/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Token': token },
-      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'kore', speed: speed ? speed.value : 'normal' })
+    // Delegate fetch + playback to the background service worker so audio
+    // continues even if this popup is closed immediately after clicking.
+    const resp = await chrome.runtime.sendMessage({
+      type: 'TTS_REQUEST',
+      text,
+      token,
+      serverUrl,
+      speed: speed ? speed.value : 'normal',
+      callType: cloned ? 'SCAM_DETECTED' : 'LEGITIMATE'
     });
-    if (!r.ok) {
-      const e = await r.json();
-      if (statusEl) statusEl.textContent = 'Error: ' + (e.error || r.status);
-      if (!silent && speakBtn) speakBtn.disabled = false;
-      return;
+    if (resp && resp.ok) {
+      if (statusEl && !silent) statusEl.textContent = 'Playing...';
+      addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
+    } else {
+      if (statusEl) statusEl.textContent = 'Error: ' + (resp && resp.error || 'unknown');
+      addLog('warn', 'Voice error: ' + (resp && resp.error || 'unknown'));
     }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); if (!silent && statusEl) statusEl.textContent = 'Done'; };
-    audio.onerror = () => { URL.revokeObjectURL(url); if (statusEl) statusEl.textContent = 'Playback error'; };
-    await audio.play();
-    addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
   } catch (e) {
     if (statusEl) statusEl.textContent = 'Error -- is Flask running?';
     addLog('warn', 'Voice error: ' + e.message);
