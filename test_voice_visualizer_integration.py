@@ -191,13 +191,27 @@ class TestBroadcastToVisualizers:
 
     @pytest.mark.asyncio
     async def test_failed_client_does_not_raise(self, bridge):
-        """A client whose send() raises should not propagate (gather absorbs)."""
+        """A client whose send() raises should not propagate (gather absorbs)
+        and should not prevent other clients from receiving the broadcast.
+        """
         bad_client = AsyncMock()
         bad_client.send.side_effect = Exception("connection lost")
+
+        good_client = AsyncMock()
+
         bridge.websocket_clients.add(bad_client)
+        bridge.websocket_clients.add(good_client)
+
+        payload = {"type": "ping"}
 
         # Should not raise
-        await bridge.broadcast_to_visualizers({"type": "ping"})
+        await bridge.broadcast_to_visualizers(payload)
+
+        # Failing client is called but its exception is absorbed
+        bad_client.send.assert_called_once_with(json.dumps(payload))
+
+        # Healthy client must still receive the payload
+        good_client.send.assert_called_once_with(json.dumps(payload))
 
 
 # ===========================================================================
