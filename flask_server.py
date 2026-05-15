@@ -8,13 +8,16 @@ Env vars:
   VOICE_SERVER_TOKEN    - shared secret (X-Token header) [optional in dev]
   SHODAN_API_KEY        - Shodan API key (optional)
   ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. chrome-extension://YOUR_ID)
-  PORT                  - bind port (default 5000)
+  PORT                  - bind port (default 5001)
   ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST (unsafe; logs a warning)
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
 import os, io, re, json, time, wave, tempfile, importlib, sys
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
+
 from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -57,9 +60,6 @@ SAMPLES_DIR        = Path("voice_samples")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
-# ── token guard ───────────────────────────────────────────────────────
-# When VOICE_SERVER_TOKEN is not set the server runs in dev/open mode and
-# accepts all requests from localhost.  Set the env var in production.
 if not VOICE_SERVER_TOKEN:
     print(
         "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
@@ -69,38 +69,25 @@ if not VOICE_SERVER_TOKEN:
     )
 
 # ── CORS ──────────────────────────────────────────────────────────────
-# Add your Chrome extension ID via ALLOWED_ORIGINS env var:
-#   export ALLOWED_ORIGINS="chrome-extension://YOUR_EXTENSION_ID"
 _extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = [
-    "http://127.0.0.1:5000",
-    "http://localhost:5000",
+    "http://127.0.0.1:5001",
+    "http://localhost:5001",
 ] + _extra_origins
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB max upload
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
-    """Return True when auth passes.
-    - No token configured (dev mode): always allow.
-    - Token configured: require matching X-Token header.
-    """
     if not VOICE_SERVER_TOKEN:
-        return True  # open dev mode
+        return True
     return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
 
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(voice_id: str) -> dict:
-    """Return a voice-settings dict for the given voice_id.
-
-    Resolution order:
-    1. If voice_id == 'cloned': try custom_voice_config.get_custom_voice_settings()
-    2. Fall back to voice_config built-in presets.
-    3. Hard-coded default (Kore).
-    """
     if voice_id and voice_id.lower() == "cloned":
         try:
             custom = importlib.import_module("custom_voice_config")
@@ -120,7 +107,6 @@ def _resolve_voice_settings(voice_id: str) -> dict:
     except Exception:
         pass
 
-    # Hard-coded default: use voice_id as Gemini prebuilt name if provided
     if voice_id and voice_id.lower() not in ("cloned", "default", ""):
         return {"voice_id": voice_id}
     return {"voice_id": "Kore"}
@@ -145,7 +131,6 @@ def tts():
     if synthesize_speech is None:
         return jsonify({"error": "TTS engine not available — install google-genai"}), 503
     try:
-        # Read voice_id from request (popup.js sends 'cloned' or a preset name like 'kore')
         voice_id = (data.get("voice_id") or "Kore").strip()
         voice_settings = _resolve_voice_settings(voice_id)
         audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
@@ -392,5 +377,5 @@ if __name__ == "__main__":
         )
 
     host = _requested_host if _allow_network else "127.0.0.1"
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5001))
     app.run(host=host, port=port, debug=False)
