@@ -1,43 +1,122 @@
-import asyncio
 import os
+import time
 from pathlib import Path
-from google import genai
+
+# ── Coqui XTTS v2 lazy loader ─────────────────────────────────────────
+_tts_model = None
+
+def _get_coqui_model():
+    """Lazy-load Coqui XTTS v2 on first use (downloads ~2GB once)."""
+    global _tts_model
+    if _tts_model is None:
+        try:
+            from TTS.api import TTS
+            print("Loading Coqui XTTS v2 model (first run downloads ~2GB)...")
+            _tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+            print("Coqui XTTS v2 loaded.")
+        except ImportError:
+            print("Coqui TTS not installed. Run: pip install TTS")
+            _tts_model = None
+    return _tts_model
 
 
 # ── train_from_samples ────────────────────────────────────────────────
 # Called by flask_server.py /train endpoint.
-# Saves samples locally and writes custom_voice_config.py.
-# Real Gemini voice cloning is not yet available via the public API;
-# samples are stored so they are ready when the API supports it.
+# Takes the 4 karaoke recording clips and trains a real Coqui XTTS v2
+# speaker embedding. No API key required — runs 100% locally.
 def train_from_samples(sample_paths: list) -> str | None:
-    """Save samples and write custom_voice_config.py.
+    """Train a Coqui XTTS v2 speaker embedding from recorded clips.
 
-    Returns a local voice_id string on success, or None if no paths given.
+    Args:
+        sample_paths: List of .webm/.wav file paths from the karaoke recorder.
+
+    Returns:
+        voice_id string on success, or None on failure.
     """
     if not sample_paths:
         return None
 
-    # Generate a local voice ID based on timestamp
-    voice_id = f"local_voice_{int(asyncio.get_event_loop().time()) if asyncio.get_event_loop().is_running() else int(__import__('time').time())}"
+    # Convert any .webm clips to .wav using ffmpeg (Chrome records webm)
+    wav_paths = []
+    for path in sample_paths:
+        p = Path(path)
+        if p.suffix.lower() == ".webm":
+            wav_path = p.with_suffix(".wav")
+            ret = os.system(f'ffmpeg -y -i "{p}" -ar 22050 -ac 1 "{wav_path}" 2>/dev/null')
+            if ret == 0 and wav_path.exists():
+                wav_paths.append(str(wav_path))
+            else:
+                print(f"ffmpeg conversion failed for {p}, skipping.")
+        elif p.suffix.lower() == ".wav":
+            wav_paths.append(str(p))
 
-    # Write custom_voice_config.py so /tts can pick up the voice
-    _write_voice_config(voice_id)
+    if not wav_paths:
+        print("No usable wav files after conversion.")
+        return None
 
-    print(f"Voice samples saved ({len(sample_paths)} clips). Voice ID: {voice_id}")
-    print("Note: Full voice cloning requires an external API (ElevenLabs, etc.).")
-    print("Set ELEVENLABS_API_KEY and update voice_training.py to enable real cloning.")
+    # Generate a unique voice ID
+    voice_id = f"local_voice_{int(time.time())}"
+    embedding_dir = Path("voice_embeddings")
+    embedding_dir.mkdir(exist_ok=True)
+    embedding_path = embedding_dir / f"{voice_id}.json"
 
+    # Load the model and compute speaker embedding from all clips
+    model = _get_coqui_model()
+    if model is None:
+        # Fallback: save paths only, no real embedding
+        import json
+        embedding_path.write_text(json.dumps({
+            "voice_id": voice_id,
+            "sample_paths": wav_paths,
+            "engine": "fallback"
+        }))
+        _write_voice_config(voice_id, wav_paths, engine="fallback")
+        print(f"Coqui not available. Saved sample paths for later. Voice ID: {voice_id}")
+        return voice_id
+
+    # Compute the speaker embedding using Coqui's internal encoder
+    try:
+        import json
+        from TTS.tts.configs.xtts_config import XttsConfig
+        gpt_cond_latent, speaker_embedding = model.synthesizer.tts_model.get_conditioning_latents(
+            audio_path=wav_paths
+        )
+        import torch
+        embedding_data = {
+            "voice_id": voice_id,
+            "sample_paths": wav_paths,
+            "engine": "coqui_xtts_v2",
+            "gpt_cond_latent": gpt_cond_latent.cpu().tolist(),
+            "speaker_embedding": speaker_embedding.cpu().tolist(),
+        }
+        embedding_path.write_text(json.dumps(embedding_data))
+        print(f"Speaker embedding saved to {embedding_path}")
+    except Exception as e:
+        print(f"Embedding extraction failed ({e}), falling back to sample paths.")
+        import json
+        embedding_path.write_text(json.dumps({
+            "voice_id": voice_id,
+            "sample_paths": wav_paths,
+            "engine": "fallback"
+        }))
+
+    _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
+    print(f"Voice training complete. Voice ID: {voice_id}")
     return voice_id
 
 
-def _write_voice_config(voice_id: str):
-    """Write custom_voice_config.py with the trained voice ID."""
-    config_code = f'''# Auto-generated by voice_training.py
+def _write_voice_config(voice_id: str, sample_paths: list = None, engine: str = "coqui_xtts_v2"):
+    """Write custom_voice_config.py with the trained voice metadata."""
+    paths_repr = repr(sample_paths or [])
+    config_code = f'''# Auto-generated by voice_training.py — do not edit manually.
 CUSTOM_VOICE_ID = "{voice_id}"
+CUSTOM_VOICE_ENGINE = "{engine}"
+CUSTOM_VOICE_SAMPLES = {paths_repr}
 
 def get_custom_voice_settings(context):
     base = {{
         "voice_id": CUSTOM_VOICE_ID,
+        "engine": CUSTOM_VOICE_ENGINE,
         "speaking_rate": 1.0,
         "pitch": 0,
         "emotion": "professional"
@@ -47,91 +126,58 @@ def get_custom_voice_settings(context):
     elif context == "VERIFICATION":
         base.update({{"emotion": "calm", "speaking_rate": 1.0}})
     elif context == "cloned":
-        pass  # use base defaults for cloned voice
+        pass
     else:
         base.update({{"emotion": "helpful", "speaking_rate": 1.1}})
     return base
 '''
     with open("custom_voice_config.py", "w") as f:
         f.write(config_code)
-    print(f"custom_voice_config.py written with voice_id={voice_id}")
+    print(f"custom_voice_config.py written — voice_id={voice_id}, engine={engine}")
 
 
-# ── VoiceTrainer (interactive CLI tool) ───────────────────────────────
-class VoiceTrainer:
-    def __init__(self):
-        self.client = genai.Client()
+# ── synthesize_with_cloned_voice ──────────────────────────────────────
+# Called by tts_engine.py when voice_id starts with 'local_voice_'
+def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
+    """Synthesize speech using the saved Coqui speaker embedding.
 
-    async def create_voice_profile(self, voice_samples_path):
-        """Print recording guide for training phrases."""
-        training_phrases = [
-            "Hello, this is a legal screening service.",
-            "I need to verify some information.",
-            "Your call appears to be fraudulent.",
-            "Thank you for calling our office.",
-            "May I know who is calling and the purpose of your call?",
-            "This number is being reported to the authorities.",
-            "What type of legal assistance do you need?",
-            "I'll need to verify this before proceeding.",
-            "Do not call again.",
-            "Let me connect you to our intake system.",
-        ]
-        print("Voice Training Setup")
-        print("Please record these phrases in your natural voice:")
-        print("-" * 50)
-        for i, phrase in enumerate(training_phrases, 1):
-            print(f'{i}. "{phrase}"')
-            print(f"   Save as: voice_sample_{i:02d}.wav")
-            print()
-        print("Recording Instructions:")
-        print("- Use a quiet environment")
-        print("- Speak naturally, don't over-enunciate")
-        print("- Record in .wav format, 44.1kHz")
-        print("- Each phrase: 3-5 seconds long")
-        print("- Save all files in:", voice_samples_path)
+    Returns raw WAV bytes, or None if synthesis fails.
+    """
+    import json
+    embedding_path = Path("voice_embeddings") / f"{voice_id}.json"
+    if not embedding_path.exists():
+        print(f"No embedding found for {voice_id}")
+        return None
 
-    async def train_custom_voice(self, voice_samples_path, voice_name="my_legal_voice"):
-        """Train custom voice model via Gemini API (when available)."""
-        try:
-            voice_files = [
-                f"{voice_samples_path}/voice_sample_{i:02d}.wav"
-                for i in range(1, 11)
-            ]
-            voice_profile = await self.client.voices.create(
-                name=voice_name,
-                samples=voice_files,
-                description="Legal paralegal voice",
-                language="en-US",
-            )
-            print(f"Voice profile created: {voice_profile.id}")
-            print("Training may take 10-30 minutes...")
-            while voice_profile.status != "ready":
-                await asyncio.sleep(30)
-                voice_profile = await self.client.voices.get(voice_profile.id)
-                print(f"Training status: {voice_profile.status}")
-            print(f"Voice training complete! Voice ID: {voice_profile.id}")
-            return voice_profile.id
-        except Exception as e:
-            print(f"Training failed: {e}")
-            return None
+    data = json.loads(embedding_path.read_text())
+    engine = data.get("engine", "fallback")
+    sample_paths = data.get("sample_paths", [])
 
-    def update_scam_screener_with_custom_voice(self, voice_id):
-        _write_voice_config(voice_id)
-        print("Custom voice config created!")
+    model = _get_coqui_model()
+    if model is None or engine == "fallback":
+        print("Coqui not available or fallback mode — cannot synthesize cloned voice.")
+        return None
 
+    try:
+        import torch
+        import io
+        import soundfile as sf
 
-async def main():
-    trainer = VoiceTrainer()
-    print("Custom Voice Training for Scam Screener")
-    print("=" * 50)
-    await trainer.create_voice_profile("./voice_samples")
-    input("\nPress Enter after recording all voice samples...")
-    voice_id = await trainer.train_custom_voice("./voice_samples")
-    if voice_id:
-        trainer.update_scam_screener_with_custom_voice(voice_id)
-        print(f"Your scam screener will now speak with YOUR voice!")
-        print(f"Voice ID: {voice_id}")
+        gpt_cond_latent = torch.tensor(data["gpt_cond_latent"])
+        speaker_embedding = torch.tensor(data["speaker_embedding"])
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        out = model.synthesizer.tts_model.inference(
+            text=text,
+            language="en",
+            gpt_cond_latent=gpt_cond_latent,
+            speaker_embedding=speaker_embedding,
+            temperature=0.7,
+        )
+        wav = out["wav"]
+        buf = io.BytesIO()
+        sf.write(buf, wav, 24000, format="WAV")
+        buf.seek(0)
+        return buf.read()
+    except Exception as e:
+        print(f"Coqui synthesis failed: {e}")
+        return None
