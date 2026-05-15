@@ -5,9 +5,9 @@ Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status
 
 Env vars:
   GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
-  VOICE_SERVER_TOKEN    - shared secret (X-Token header) [required]
+  VOICE_SERVER_TOKEN    - shared secret (X-Token header) [optional in dev]
   SHODAN_API_KEY        - Shodan API key (optional)
-  ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. extension IDs)
+  ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. chrome-extension://YOUR_ID)
   PORT                  - bind port (default 5000)
   ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST (unsafe; logs a warning)
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
@@ -47,7 +47,7 @@ except ImportError:
     _default_voice_fn = None
 
 # ── config ────────────────────────────────────────────────────────────
-VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
+VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = 2000
 PRESET_PATH        = Path("voice_presets.json")
@@ -58,22 +58,19 @@ SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
 # ── token guard ───────────────────────────────────────────────────────
-# Require a token for all protected endpoints.  An empty token is treated as
-# "not configured" and every request is rejected with 401 so the server is
-# secure by default.
+# When VOICE_SERVER_TOKEN is not set the server runs in dev/open mode and
+# accepts all requests from localhost.  Set the env var in production.
 if not VOICE_SERVER_TOKEN:
     print(
-        "WARNING: VOICE_SERVER_TOKEN is not set.  All requests to protected "
-        "endpoints will be rejected with HTTP 401.  Set the env var before "
-        "starting the server:\n"
-        "  export VOICE_SERVER_TOKEN='choose-a-strong-random-secret'",
+        "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
+        "All protected endpoints are accessible without a token.\n"
+        "Set VOICE_SERVER_TOKEN in production to enable auth.",
         file=sys.stderr,
     )
 
 # ── CORS ──────────────────────────────────────────────────────────────
-# Exact localhost origins only.  No wildcard patterns, no "null" origin.
-# Users who need to allow a specific Chrome extension can add its origin
-# (e.g. "chrome-extension://abcdef...") via the ALLOWED_ORIGINS env var.
+# Add your Chrome extension ID via ALLOWED_ORIGINS env var:
+#   export ALLOWED_ORIGINS="chrome-extension://YOUR_EXTENSION_ID"
 _extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = [
     "http://127.0.0.1:5000",
@@ -87,54 +84,51 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
-    """Return True only when a token is configured AND the request supplies it."""
+    """Return True when auth passes.
+    - No token configured (dev mode): always allow.
+    - Token configured: require matching X-Token header.
+    """
     if not VOICE_SERVER_TOKEN:
-        # No token configured → always deny protected endpoints.
-        return False
+        return True  # open dev mode
     return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
 
 # ── voice-settings resolution ─────────────────────────────────────────
-def _resolve_voice_settings(call_type: str) -> dict:
-    """Return a voice-settings dict for *call_type*.
+def _resolve_voice_settings(voice_id: str) -> dict:
+    """Return a voice-settings dict for the given voice_id.
 
     Resolution order:
-    1. ``custom_voice_config.get_custom_voice_settings(call_type)`` – written by
-       voice_training.py when the user trains a custom voice.
-    2. ``voice_config.get_voice_for_context(call_type)`` – built-in presets.
+    1. If voice_id == 'cloned': try custom_voice_config.get_custom_voice_settings()
+    2. Fall back to voice_config built-in presets.
     3. Hard-coded default (Kore).
-
-    Any exception from user-supplied config is caught so a malformed
-    ``custom_voice_config.py`` never crashes ``/tts``.
     """
-    # 1. Try custom voice config
-    try:
-        custom = importlib.import_module("custom_voice_config")
-        fn = getattr(custom, "get_custom_voice_settings", None)
-        if callable(fn):
-            result = fn(call_type)
-            if isinstance(result, dict) and result:
-                return result
-    except Exception:
-        pass
+    if voice_id and voice_id.lower() == "cloned":
+        try:
+            custom = importlib.import_module("custom_voice_config")
+            fn = getattr(custom, "get_custom_voice_settings", None)
+            if callable(fn):
+                result = fn("cloned")
+                if isinstance(result, dict) and result:
+                    return result
+        except Exception:
+            pass
 
-    # 2. Fall back to built-in voice config
     try:
         if callable(_default_voice_fn):
-            result = _default_voice_fn(call_type)
+            result = _default_voice_fn(voice_id or "LEGITIMATE")
             if isinstance(result, dict) and result:
                 return result
     except Exception:
         pass
 
-    # 3. Hard-coded default
+    # Hard-coded default: use voice_id as Gemini prebuilt name if provided
+    if voice_id and voice_id.lower() not in ("cloned", "default", ""):
+        return {"voice_id": voice_id}
     return {"voice_id": "Kore"}
 
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
-    # /health is intentionally open (no token required) so monitoring tools
-    # and the extension's connection check can reach it.
-    return jsonify({"status": "ok", "model": _model_status()})
+    return jsonify({"status": "ok", "model": _model_status(), "dev_mode": not bool(VOICE_SERVER_TOKEN)})
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
@@ -149,10 +143,11 @@ def tts():
     if len(text) > MAX_TEXT_LENGTH:
         return jsonify({"error": "Text too long"}), 400
     if synthesize_speech is None:
-        return jsonify({"error": "TTS engine not available"}), 503
+        return jsonify({"error": "TTS engine not available — install google-genai"}), 503
     try:
-        call_type = data.get("call_type", "LEGITIMATE")
-        voice_settings = _resolve_voice_settings(call_type)
+        # Read voice_id from request (popup.js sends 'cloned' or a preset name like 'kore')
+        voice_id = (data.get("voice_id") or "Kore").strip()
+        voice_settings = _resolve_voice_settings(voice_id)
         audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
         if error:
             return jsonify({"error": error}), 500
@@ -257,7 +252,6 @@ def analyze_pdf():
     url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
     suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
 
-    # Try pdfplumber first (better)
     if pdfplumber:
         try:
             with pdfplumber.open(io.BytesIO(raw)) as pdf:
@@ -281,7 +275,6 @@ def analyze_pdf():
         except Exception:
             pass
 
-    # Fallback: PyPDF2
     if PyPDF2:
         try:
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
@@ -299,7 +292,6 @@ def analyze_pdf():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # Raw fallback - no PDF lib installed
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
     raw_str = raw.decode("latin-1", errors="ignore")
     result["ips"] = list(set(ip_pattern.findall(raw_str)))
@@ -320,9 +312,8 @@ def train():
     saved = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        # Sanitize: strip non-safe chars, then strip any directory components
         safe = re.sub(r'[^\w.\-]', '_', fname)
-        safe = Path(safe).name  # prevent path traversal
+        safe = Path(safe).name
         dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
@@ -334,16 +325,18 @@ def train():
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
-    # Call voice_training if available — surface real errors
     voice_id = None
     try:
         from voice_training import train_from_samples
         voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
-        manifest["status"] = "trained"
-        manifest["voice_id"] = voice_id
+        manifest["status"] = "trained" if voice_id else "samples_saved"
+        if voice_id:
+            manifest["voice_id"] = voice_id
+        else:
+            manifest["note"] = "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
     except ImportError:
         manifest["status"] = "samples_saved"
-        manifest["note"] = "voice_training.py not installed — samples saved only"
+        manifest["note"] = "voice_training.py not found — samples saved only"
     except Exception as e:
         manifest["status"] = "training_failed"
         manifest["error"] = str(e)
@@ -370,7 +363,8 @@ def _model_status():
                 "trained_at": m.get("trained_at", "unknown"),
                 "status": m.get("status", "unknown"),
                 "voice_id": m.get("voice_id"),
-                "error": m.get("error")
+                "error": m.get("error"),
+                "note": m.get("note")
             }
         except Exception:
             pass
@@ -385,18 +379,15 @@ if __name__ == "__main__":
     if _requested_host not in _loopback and not _allow_network:
         print(
             f"ERROR: HOST={_requested_host!r} is not a loopback address.  "
-            "Binding to non-loopback addresses exposes this server to the "
-            "network, which contradicts its privacy-first design.\n"
-            "Set ALLOW_NETWORK_BINDING=1 if you understand the risk and "
-            "explicitly want network exposure.",
+            "Set ALLOW_NETWORK_BINDING=1 if you understand the risk.",
             file=sys.stderr,
         )
         sys.exit(1)
 
     if _allow_network and _requested_host not in _loopback:
         print(
-            f"WARNING: ALLOW_NETWORK_BINDING=1 is set.  Binding to "
-            f"{_requested_host!r} — this server is reachable from the network.",
+            f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}, "
+            "server is reachable from the network.",
             file=sys.stderr,
         )
 
