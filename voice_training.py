@@ -1,6 +1,10 @@
 import os
+import subprocess
 import time
 from pathlib import Path
+
+# Allowed audio extensions for voice training clips
+_ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
 # ── Coqui XTTS v2 lazy loader ─────────────────────────────────────────
 _tts_model = None
@@ -20,6 +24,24 @@ def _get_coqui_model():
     return _tts_model
 
 
+def _convert_to_wav(src: Path, dst: Path) -> bool:
+    """Convert audio file to wav using subprocess (no shell=True).
+
+    Uses subprocess.run with a list of args so no shell injection is possible
+    regardless of what the filename contains.
+    """
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", str(src), "-ar", "22050", "-ac", "1", str(dst)],
+            capture_output=True,
+            timeout=120,
+        )
+        return result.returncode == 0 and dst.exists()
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        print(f"ffmpeg error for {src}: {e}")
+        return False
+
+
 # ── train_from_samples ────────────────────────────────────────────────
 # Called by flask_server.py /train endpoint.
 # Takes the 4 karaoke recording clips and trains a real Coqui XTTS v2
@@ -36,19 +58,24 @@ def train_from_samples(sample_paths: list) -> str | None:
     if not sample_paths:
         return None
 
-    # Convert any .webm clips to .wav using ffmpeg (Chrome records webm)
     wav_paths = []
     for path in sample_paths:
         p = Path(path)
-        if p.suffix.lower() == ".webm":
+
+        # Validate extension before touching the file
+        if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
+            print(f"Rejected file with disallowed extension: {p.name}")
+            continue
+
+        if p.suffix.lower() == ".wav":
+            wav_paths.append(str(p))
+        else:
+            # Convert to wav using subprocess list-form (no shell injection possible)
             wav_path = p.with_suffix(".wav")
-            ret = os.system(f'ffmpeg -y -i "{p}" -ar 22050 -ac 1 "{wav_path}" 2>/dev/null')
-            if ret == 0 and wav_path.exists():
+            if _convert_to_wav(p, wav_path):
                 wav_paths.append(str(wav_path))
             else:
-                print(f"ffmpeg conversion failed for {p}, skipping.")
-        elif p.suffix.lower() == ".wav":
-            wav_paths.append(str(p))
+                print(f"Conversion failed for {p.name}, skipping.")
 
     if not wav_paths:
         print("No usable wav files after conversion.")
@@ -63,7 +90,6 @@ def train_from_samples(sample_paths: list) -> str | None:
     # Load the model and compute speaker embedding from all clips
     model = _get_coqui_model()
     if model is None:
-        # Fallback: save paths only, no real embedding
         import json
         embedding_path.write_text(json.dumps({
             "voice_id": voice_id,
@@ -74,10 +100,8 @@ def train_from_samples(sample_paths: list) -> str | None:
         print(f"Coqui not available. Saved sample paths for later. Voice ID: {voice_id}")
         return voice_id
 
-    # Compute the speaker embedding using Coqui's internal encoder
     try:
         import json
-        from TTS.tts.configs.xtts_config import XttsConfig
         gpt_cond_latent, speaker_embedding = model.synthesizer.tts_model.get_conditioning_latents(
             audio_path=wav_paths
         )
@@ -137,7 +161,6 @@ def get_custom_voice_settings(context):
 
 
 # ── synthesize_with_cloned_voice ──────────────────────────────────────
-# Called by tts_engine.py when voice_id starts with 'local_voice_'
 def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     """Synthesize speech using the saved Coqui speaker embedding.
 
@@ -151,7 +174,6 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
 
     data = json.loads(embedding_path.read_text())
     engine = data.get("engine", "fallback")
-    sample_paths = data.get("sample_paths", [])
 
     model = _get_coqui_model()
     if model is None or engine == "fallback":
