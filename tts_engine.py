@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-TTS Engine - Text-to-Speech synthesis using Google GenAI.
+TTS Engine - Text-to-Speech synthesis.
 
-Privacy-first design: audio bytes are returned in-memory and never written to
-disk unless an explicit debug_output_path is provided.
+Routing logic:
+  - voice_id starts with 'local_voice_' -> Coqui XTTS v2 (local, no API key)
+  - anything else                       -> Google Gemini TTS
+
+Privacy-first: audio bytes returned in-memory, never written to disk
+unless debug_output_path is provided.
 """
 
 import logging
@@ -47,17 +51,30 @@ def synthesize_speech(
         logger.warning("Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH)
         text = text[:MAX_TEXT_LENGTH]
 
+    voice_id = (voice_settings.get("voice_id") or "Kore").strip()
+
+    # ── Route to Coqui XTTS v2 for locally trained voices ──────────────────
+    if voice_id.startswith("local_voice_"):
+        logger.info("Routing to Coqui XTTS v2 for cloned voice: %s", voice_id)
+        try:
+            from voice_training import synthesize_with_cloned_voice
+            audio_bytes = synthesize_with_cloned_voice(text, voice_id)
+            if audio_bytes:
+                if debug_output_path:
+                    with open(debug_output_path, "wb") as fh:
+                        fh.write(audio_bytes)
+                return audio_bytes, "audio/wav", None, text
+            else:
+                logger.warning("Coqui synthesis returned None, falling back to Gemini Kore.")
+                voice_id = "Kore"  # fall through to Gemini below
+        except Exception as e:
+            logger.error("Coqui synthesis error: %s", e)
+            voice_id = "Kore"  # fall through to Gemini below
+
+    # ── Gemini TTS for stock / preset voices ──────────────────────────────
     try:
         from google.genai import types as genai_types
-
         client = _get_client()
-        voice_id = voice_settings.get("voice_id") or "Kore"
-
-        # Gemini only supports its own prebuilt voice names — if voice_id is a
-        # local cloned ID (starts with 'local_voice_'), fall back to Kore.
-        if voice_id.startswith("local_voice_"):
-            logger.info("Local cloned voice detected (%s) — using Kore as fallback until real cloning API is available.", voice_id)
-            voice_id = "Kore"
 
         if voice_id and voice_id.lower() != "default":
             voice_cfg = genai_types.VoiceConfig(
@@ -82,7 +99,6 @@ def synthesize_speech(
                 ),
             ),
         )
-
         part = response.candidates[0].content.parts[0]
         audio_bytes: bytes = part.inline_data.data
         mime_type: str = part.inline_data.mime_type or "audio/wav"
