@@ -1,6 +1,6 @@
 /* popup.js - Voice AI Tools v3.0 - karaoke train UI, no emoji */
 
-const DEFAULT_SERVER = 'http://127.0.0.1:5000';
+const DEFAULT_SERVER = 'http://127.0.0.1:5001';
 let serverUrl = DEFAULT_SERVER, token = '', logs = [];
 let mediaRecorder = null, recordedChunks = [], isRecording = false;
 let trainClips = [null, null, null, null];
@@ -172,25 +172,26 @@ async function speakText(cloned, silent) {
   if (statusEl && !silent) statusEl.textContent = 'Speaking...';
   const speed = document.getElementById('voice-speed');
   try {
-    // Delegate fetch + playback to the background service worker so audio
-    // continues even if this popup is closed immediately after clicking.
-    const resp = await chrome.runtime.sendMessage({
-      type: 'TTS_REQUEST',
-      text,
-      token,
-      serverUrl,
-      speed: speed ? speed.value : 'normal',
-      callType: cloned ? 'SCAM_DETECTED' : 'LEGITIMATE'
+    const r = await fetch(serverUrl + '/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Token': token },
+      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'Kore', speed: speed ? speed.value : 'normal' })
     });
-    if (resp && resp.ok) {
-      if (statusEl && !silent) statusEl.textContent = 'Playing...';
-      addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
-    } else {
-      if (statusEl) statusEl.textContent = 'Error: ' + (resp && resp.error || 'unknown');
-      addLog('warn', 'Voice error: ' + (resp && resp.error || 'unknown'));
+    if (!r.ok) {
+      const e = await r.json();
+      if (statusEl) statusEl.textContent = 'Error: ' + (e.error || r.status);
+      if (!silent && speakBtn) speakBtn.disabled = false;
+      return;
     }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.onended = () => { URL.revokeObjectURL(url); if (!silent && statusEl) statusEl.textContent = 'Done'; };
+    audio.onerror = () => { URL.revokeObjectURL(url); if (statusEl) statusEl.textContent = 'Playback error'; };
+    await audio.play();
+    addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
   } catch (e) {
-    if (statusEl) statusEl.textContent = 'Error -- is Flask running?';
+    if (statusEl) statusEl.textContent = 'Error -- is Flask running on port 5001?';
     addLog('warn', 'Voice error: ' + e.message);
   }
   if (!silent && speakBtn) speakBtn.disabled = false;
@@ -250,6 +251,7 @@ function initTrain() {
       if (d.trained) {
         if (status) status.textContent = 'Model: ' + (d.status || 'trained') + ' / ' + (d.count || '?') + ' clips / ' + (d.trained_at || '');
         if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
+        if (d.note && status) status.textContent += ' -- ' + d.note;
         if (d.error && status) status.textContent += ' -- ' + d.error;
       } else {
         if (status) status.textContent = 'No model trained yet.';
@@ -257,7 +259,7 @@ function initTrain() {
       }
     } catch (e) {
       const status = document.getElementById('train-status');
-      if (status) status.textContent = 'Could not reach server.';
+      if (status) status.textContent = 'Could not reach server on port 5001.';
     }
   });
 }
@@ -422,7 +424,7 @@ async function submitTraining() {
       addLog('warn', 'Training failed: ' + (d.error || 'unknown'));
     }
   } catch (e) {
-    if (status) status.textContent = 'Upload error -- is Flask running?';
+    if (status) status.textContent = 'Upload error -- is Flask running on port 5001?';
     addLog('warn', 'Train upload error: ' + e.message);
   }
   if (trainBtn) { trainBtn.disabled = false; updateTrainBtn(); }
@@ -451,7 +453,7 @@ function initTrack() {
       if (trackBox) trackBox.textContent = lines.join('\n');
       addLog('track', 'Scanned: ' + ip);
     } catch (e) {
-      if (trackBox) trackBox.textContent = 'Scan failed. Is Flask running?';
+      if (trackBox) trackBox.textContent = 'Scan failed. Is Flask running on port 5001?';
       addLog('warn', 'Scan error: ' + e.message);
     }
   });
@@ -481,7 +483,7 @@ async function analyzePDF(f, box) {
     if (box) box.textContent = lines.join('\n');
     addLog('ok', 'PDF done: ' + f.name);
   } catch (e) {
-    if (box) box.textContent = 'PDF failed. Is Flask running?';
+    if (box) box.textContent = 'PDF failed. Is Flask running on port 5001?';
     addLog('warn', 'PDF error: ' + e.message);
   }
 }
