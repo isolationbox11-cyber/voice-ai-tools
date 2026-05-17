@@ -19,7 +19,7 @@ jobs:
 
       - name: Install lightweight test deps
         run: |
-          pip install flask flask-cors flask-limiter python-dotenv pytest
+          pip install flask flask-cors flask-limiter python-dotenv pytest pytest-asyncio
 
       - name: Run tests
         run: pytest test_voice_training.py test_flask_server.py test_voice_visualizer_integration.py -v
