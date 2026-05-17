@@ -6,7 +6,7 @@ from pathlib import Path
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
-# ── Coqui XTTS v2 lazy loader ─────────────────────────────────────────
+# ── Coqui XTTS v2 lazy loader ───────────────────────────────────────
 _tts_model = None
 
 def _get_coqui_model():
@@ -42,15 +42,15 @@ def _convert_to_wav(src: Path, dst: Path) -> bool:
         return False
 
 
-# ── train_from_samples ────────────────────────────────────────────────
+# ── train_from_samples ────────────────────────────────────────────
 # Called by flask_server.py /train endpoint.
-# Takes the 4 karaoke recording clips and trains a real Coqui XTTS v2
+# Takes the recorded audio clips and trains a real Coqui XTTS v2
 # speaker embedding. No API key required — runs 100% locally.
 def train_from_samples(sample_paths: list) -> str | None:
     """Train a Coqui XTTS v2 speaker embedding from recorded clips.
 
     Args:
-        sample_paths: List of .webm/.wav file paths from the karaoke recorder.
+        sample_paths: List of .webm/.wav file paths from the recorder.
 
     Returns:
         voice_id string on success, or None on failure.
@@ -61,12 +61,10 @@ def train_from_samples(sample_paths: list) -> str | None:
     wav_paths = []
     for path in sample_paths:
         p = Path(path)
-
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {p.name}")
             continue
-
         if p.suffix.lower() == ".wav":
             wav_paths.append(str(p))
         else:
@@ -115,6 +113,9 @@ def train_from_samples(sample_paths: list) -> str | None:
         }
         embedding_path.write_text(json.dumps(embedding_data))
         print(f"Speaker embedding saved to {embedding_path}")
+        # FIX: write voice config on successful training so the cloned voice
+        # is immediately available via flask_server._resolve_voice_settings()
+        _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
     except Exception as e:
         print(f"Embedding extraction failed ({e}), falling back to sample paths.")
         import json
@@ -123,8 +124,8 @@ def train_from_samples(sample_paths: list) -> str | None:
             "sample_paths": wav_paths,
             "engine": "fallback"
         }))
+        _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
 
-    _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
     print(f"Voice training complete. Voice ID: {voice_id}")
     return voice_id
 
@@ -160,7 +161,7 @@ def get_custom_voice_settings(context):
     print(f"custom_voice_config.py written — voice_id={voice_id}, engine={engine}")
 
 
-# ── synthesize_with_cloned_voice ──────────────────────────────────────
+# ── synthesize_with_cloned_voice ────────────────────────────────────
 def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     """Synthesize speech using the saved Coqui speaker embedding.
 
@@ -174,7 +175,6 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
 
     data = json.loads(embedding_path.read_text())
     engine = data.get("engine", "fallback")
-
     model = _get_coqui_model()
     if model is None or engine == "fallback":
         print("Coqui not available or fallback mode — cannot synthesize cloned voice.")
