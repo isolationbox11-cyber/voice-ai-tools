@@ -20,7 +20,7 @@ voice_visualizer_integration.py  →  ws://localhost:8765
 interactive_voice_visualizer.html  (browser client)
 
 ── Flask + Chrome path ────────────────────────────────────────────────────────
-flask_server.py         →  http://127.0.0.1:5000/tts
+flask_server.py         →  http://127.0.0.1:5100/tts
 extension/              →  Chrome popup (UI + audio playback)
 ```
 
@@ -61,8 +61,8 @@ Record the 10 training phrases listed by the script and save them as
 python voice_training.py
 ```
 
-This writes `custom_voice_config.py` containing your `CUSTOM_VOICE_ID`.  
-Both server paths automatically detect and use this file when present.  
+This writes `custom_voice_config.py` containing your `CUSTOM_VOICE_ID`.
+Both server paths automatically detect and use this file when present.
 If you skip this step the system falls back to the default Gemini voice (`Kore`).
 
 ---
@@ -88,7 +88,7 @@ The page connects automatically to the local WebSocket server.
 - Click **▶ Start Listening** to begin voice-level simulation.
 - Click **🚨 Test Scam** or **✅ Test Legit** to trigger a synthesized speech response.
 
-Audio is generated on the Python side, base64-encoded, sent over the WebSocket, and played via `<audio>` in the browser.  
+Audio is generated on the Python side, base64-encoded, sent over the WebSocket, and played via `<audio>` in the browser.
 Falls back to `window.speechSynthesis` when no audio payload is present.
 
 ---
@@ -110,10 +110,10 @@ export VOICE_SERVER_TOKEN="choose-a-strong-random-secret"
 python flask_server.py
 ```
 
-The server binds to `127.0.0.1:5000` by default.  Override with:
+The server binds to `127.0.0.1:5100` by default.  Override with:
 
 ```bash
-HOST=127.0.0.1 PORT=5000 python flask_server.py
+HOST=127.0.0.1 PORT=5100 python flask_server.py
 ```
 
 ### 6b. Load the Chrome extension
@@ -126,7 +126,7 @@ HOST=127.0.0.1 PORT=5000 python flask_server.py
 
 1. Click the **Voice AI TTS** icon in the Chrome toolbar
 2. Click **⚙️ Settings**
-3. Set **Server URL** to `http://127.0.0.1:5000` (default)
+3. Set **Server URL** to `http://127.0.0.1:5100` (default)
 4. Set **Token** to the same value as `VOICE_SERVER_TOKEN`
 5. Click **💾 Save Settings**
 
@@ -144,7 +144,7 @@ HOST=127.0.0.1 PORT=5000 python flask_server.py
 | `GOOGLE_API_KEY` | *(required)* | Google GenAI API key |
 | `VOICE_SERVER_TOKEN` | *(empty = open)* | Shared secret for `X-Voice-Token` header |
 | `HOST` | `127.0.0.1` | Bind host |
-| `PORT` | `5000` | Bind port |
+| `PORT` | `5100` | Bind port |
 | `ALLOWED_ORIGINS` | *(empty)* | Comma-separated extra CORS origins |
 
 ---

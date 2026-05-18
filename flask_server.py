@@ -8,7 +8,7 @@ Env vars:
   VOICE_SERVER_TOKEN  - shared secret (X-Token header)
   SHODAN_API_KEY      - Shodan API key (optional)
   ALLOWED_ORIGINS     - comma-separated extra CORS origins
-  HOST / PORT         - bind address (default 127.0.0.1:5000)
+  HOST / PORT         - bind address (default 127.0.0.1:5100)
 """
 
 import os, io, re, json, time, wave, tempfile, importlib
@@ -43,22 +43,29 @@ except ImportError:
 
 # ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
-SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
-MAX_TEXT_LENGTH    = 2000
-PRESET_PATH        = Path("voice_presets.json")
-LOG_PATH           = Path("session_log.json")
-MODEL_DIR          = Path("voice_model")
-SAMPLES_DIR        = Path("voice_samples")
+SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
+MAX_TEXT_LENGTH = 2000
+PRESET_PATH = Path("voice_presets.json")
+LOG_PATH = Path("session_log.json")
+MODEL_DIR = Path("voice_model")
+SAMPLES_DIR = Path("voice_samples")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
-_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-ALLOWED_ORIGINS = ["chrome-extension://*", "http://localhost:*", "http://127.0.0.1:*"] + _extra_origins
+_extra_origins = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+ALLOWED_ORIGINS = [
+    "chrome-extension://*",
+    "http://localhost:*",
+    "http://127.0.0.1:*",
+] + _extra_origins
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB max upload
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
+
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token():
@@ -66,10 +73,33 @@ def _check_token():
         return True
     return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
 
+
+# ── / (root) ─────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "Voice AI Tools Flask Backend",
+            "endpoints": {
+                "health": "GET /health - Check server status",
+                "tts": "POST /tts - Text-to-speech synthesis",
+                "presets": "GET/POST /presets - Voice presets management",
+                "log": "GET/POST /log - Activity logging",
+                "shodan": "GET /shodan - IP intelligence lookup",
+                "analyze_pdf": "POST /analyze_pdf - PDF analysis",
+                "train": "POST /train - Voice training",
+                "model_status": "GET /model_status - Voice model status",
+            },
+        }
+    )
+
+
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "model": _model_status()})
+
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
@@ -86,11 +116,44 @@ def tts():
     if synthesize_speech is None:
         return jsonify({"error": "TTS engine not available"}), 503
     try:
-        voice_id = get_voice_for_context(data) if get_voice_for_context else None
-        audio = synthesize_speech(text, voice_id=voice_id, speed=data.get("speed", "normal"))
-        return Response(audio, mimetype="audio/wav")
+        # Get voice context settings if available
+        voice_context = get_voice_for_context(data) if get_voice_for_context else {}
+
+        # Build voice_settings dict for TTS engine
+        voice_settings = {"voice_id": "Kore"}  # Default voice
+
+        # Add voice context settings if provided
+        if voice_context:
+            voice_settings.update(voice_context)
+
+        # Override with explicit voice_id from request if provided
+        if data.get("voice_id"):
+            requested_voice = data.get("voice_id")
+            # Map "cloned" to a supported voice since GenAI doesn't support custom voices
+            if requested_voice == "cloned":
+                voice_settings["voice_id"] = (
+                    "kore"  # Use Kore as fallback for cloned voice
+                )
+            else:
+                voice_settings["voice_id"] = requested_voice
+
+        # Handle speed parameter
+        if data.get("speed"):
+            if data.get("speed") == "fast":
+                voice_settings["speaking_rate"] = 1.5
+            elif data.get("speed") == "slow":
+                voice_settings["speaking_rate"] = 0.8
+            else:
+                voice_settings["speaking_rate"] = 1.0
+
+        audio_bytes, mime_type, error_msg, _ = synthesize_speech(text, voice_settings)
+        if error_msg:
+            return jsonify({"error": error_msg}), 500
+        # Return actual mime type from TTS engine for browser compatibility
+        return Response(audio_bytes, mimetype=mime_type)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ── /presets ──────────────────────────────────────────────────────────
 @app.route("/presets", methods=["GET", "POST"])
@@ -111,7 +174,9 @@ def presets():
     if PRESET_PATH.exists():
         with open(PRESET_PATH) as f:
             presets_list = json.load(f).get("presets", [])
-    existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
+    existing = next(
+        (i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None
+    )
     if existing is not None:
         presets_list[existing] = data
     else:
@@ -119,6 +184,7 @@ def presets():
     with open(PRESET_PATH, "w") as f:
         json.dump({"presets": presets_list}, f, indent=2)
     return jsonify({"ok": True})
+
 
 # ── /log ──────────────────────────────────────────────────────────────
 @app.route("/log", methods=["GET", "POST"])
@@ -151,6 +217,7 @@ def log_endpoint():
         json.dump({"entries": entries}, f, indent=2)
     return jsonify({"ok": True})
 
+
 # ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
 @limiter.limit("10 per minute")
@@ -168,11 +235,19 @@ def shodan():
         r = _requests.get(
             f"https://api.shodan.io/shodan/host/{ip}",
             params={"key": SHODAN_API_KEY},
-            timeout=10
+            timeout=10,
         )
-        return jsonify(r.json())
+        if r.status_code != 200:
+            return jsonify(
+                {"error": f"Shodan API returned status {r.status_code}"}
+            ), r.status_code
+        try:
+            return jsonify(r.json())
+        except ValueError:
+            return jsonify({"error": "Shodan API returned invalid JSON"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ── /analyze_pdf ──────────────────────────────────────────────────────
 @app.route("/analyze_pdf", methods=["POST"])
@@ -185,9 +260,17 @@ def analyze_pdf():
     f = request.files["file"]
     raw = f.read()
     result = {"metadata": {}, "links": [], "ips": [], "suspicious": False, "pages": 0}
-    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    ip_pattern = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
-    suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
+    suspicious_keywords = [
+        "eval(",
+        "javascript:",
+        "/launch",
+        "/aa",
+        "/openaction",
+        "cmd.exe",
+        "powershell",
+    ]
 
     # Try pdfplumber first (better)
     if pdfplumber:
@@ -200,7 +283,7 @@ def analyze_pdf():
                 for page in pdf.pages:
                     t = page.extract_text() or ""
                     full_text += t
-                    for href in (page.hyperlinks or []):
+                    for href in page.hyperlinks or []:
                         uri = href.get("uri", "")
                         if uri:
                             result["links"].append(uri)
@@ -208,7 +291,9 @@ def analyze_pdf():
                 extra_links = url_pattern.findall(full_text)
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
-                result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+                result["suspicious"] = any(
+                    kw in raw_lower for kw in suspicious_keywords
+                )
                 return jsonify(result)
         except Exception:
             pass
@@ -219,10 +304,12 @@ def analyze_pdf():
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
             result["pages"] = len(reader.pages)
             info = reader.metadata or {}
-            result["metadata"] = {str(k).lstrip("/"): str(v) for k, v in info.items() if v}
+            result["metadata"] = {
+                str(k).lstrip("/"): str(v) for k, v in info.items() if v
+            }
             full_text = ""
             for page in reader.pages:
-                full_text += (page.extract_text() or "")
+                full_text += page.extract_text() or ""
             result["ips"] = list(set(ip_pattern.findall(full_text)))
             result["links"] = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
@@ -240,6 +327,7 @@ def analyze_pdf():
     result["metadata"] = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
     return jsonify(result)
 
+
 # ── /train ────────────────────────────────────────────────────────────
 @app.route("/train", methods=["POST"])
 @limiter.limit("5 per minute")
@@ -253,7 +341,7 @@ def train():
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
         # Sanitize: strip non-safe chars, then strip any directory components
-        safe = re.sub(r'[^\w.\-]', '_', fname)
+        safe = re.sub(r"[^\w.\-]", "_", fname)
         safe = Path(safe).name  # prevent path traversal
         dest = SAMPLES_DIR / safe
         f.save(dest)
@@ -262,7 +350,7 @@ def train():
         "samples": saved,
         "sample_dir": str(SAMPLES_DIR),
         "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count": len(saved)
+        "count": len(saved),
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
@@ -270,6 +358,7 @@ def train():
     voice_id = None
     try:
         from voice_training import train_from_samples
+
         voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
         manifest["status"] = "trained"
         manifest["voice_id"] = voice_id
@@ -283,12 +372,14 @@ def train():
         json.dump(manifest, mf, indent=2)
     return jsonify({"ok": True, "saved": saved, **manifest})
 
+
 # ── /model_status ─────────────────────────────────────────────────────
 @app.route("/model_status")
 def model_status():
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
     return jsonify(_model_status())
+
 
 def _model_status():
     manifest_path = MODEL_DIR / "manifest.json"
@@ -302,14 +393,15 @@ def _model_status():
                 "trained_at": m.get("trained_at", "unknown"),
                 "status": m.get("status", "unknown"),
                 "voice_id": m.get("voice_id"),
-                "error": m.get("error")
+                "error": m.get("error"),
             }
         except Exception:
             pass
     return {"trained": False}
 
+
 # ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 5100))
     app.run(host=host, port=port, debug=False)

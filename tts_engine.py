@@ -53,7 +53,9 @@ def synthesize_speech(
 
     # Sanitize / limit input length
     if len(text) > MAX_TEXT_LENGTH:
-        logger.warning("Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH)
+        logger.warning(
+            "Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH
+        )
         text = text[:MAX_TEXT_LENGTH]
 
     try:
@@ -74,9 +76,7 @@ def synthesize_speech(
             )
         else:
             voice_cfg = genai_types.VoiceConfig(
-                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
-                    voice_name="Kore"
-                )
+                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name="Kore")
             )
 
         response = client.models.generate_content(
@@ -93,6 +93,10 @@ def synthesize_speech(
         part = response.candidates[0].content.parts[0]
         audio_bytes: bytes = part.inline_data.data
         mime_type: str = part.inline_data.mime_type or "audio/wav"
+
+        logger.info(
+            f"TTS audio generated: {len(audio_bytes)} bytes, mime type: {mime_type}"
+        )
 
         if debug_output_path:
             with open(debug_output_path, "wb") as fh:

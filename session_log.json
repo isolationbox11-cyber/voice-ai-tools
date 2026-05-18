@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "type": "warn",
+      "message": "Playback error: NotSupportedError: Failed to load because no supported source was found.",
+      "time": 1779073574474,
+      "timestamp": "2026-05-17T23:06:14Z"
+    },
+    {
+      "type": "voice",
+      "message": "[cloned] hi",
+      "time": 1779073574461,
+      "timestamp": "2026-05-17T23:06:14Z"
+    },
+    {
+      "type": "warn",
+      "message": "Playback error: NotSupportedError: Failed to load because no supported source was found.",
+      "time": 1779073495853,
+      "timestamp": "2026-05-17T23:04:55Z"
+    },
+    {
+      "type": "voice",
+      "message": "[cloned] hi",
+      "time": 1779073495833,
+      "timestamp": "2026-05-17T23:04:55Z"
+    },
+    {
+      "type": "warn",
+      "message": "Playback error: NotSupportedError: Failed to load because no supported source was found.",
+      "time": 1779069278528,
+      "timestamp": "2026-05-17T21:54:38Z"
+    },
+    {
+      "type": "voice",
+      "message": "[stock] hi",
+      "time": 1779069278522,
+      "timestamp": "2026-05-17T21:54:38Z"
+    },
+    {
+      "type": "voice",
+      "message": "[cloned] hi",
+      "time": 1779069271139,
+      "timestamp": "2026-05-17T21:54:31Z"
+    }
+  ]
+}
