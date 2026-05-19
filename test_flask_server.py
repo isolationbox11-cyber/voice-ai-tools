@@ -429,6 +429,7 @@ class TestTtsEndpoint:
         srv.app.config["TESTING"] = True
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 502
             assert resp.get_json()["error"] == "Voice model unavailable"
 
     def test_tts_engine_error_message_timeout(self, monkeypatch):
