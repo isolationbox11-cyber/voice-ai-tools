@@ -174,7 +174,7 @@ async function speakText(cloned, silent) {
   try {
     const r = await fetch(serverUrl + '/tts', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Token': token },
+      headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token },
       body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'Kore', speed: speed ? speed.value : 'normal' })
     });
     if (!r.ok) {
@@ -245,7 +245,7 @@ function initTrain() {
   if (checkBtn) checkBtn.addEventListener('click', async () => {
     const status = document.getElementById('train-status');
     try {
-      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Token': token } });
+      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Voice-Token': token } });
       const d = await r.json();
       const idEl = document.getElementById('trained-voice-id');
       if (d.trained) {
@@ -409,7 +409,7 @@ async function submitTraining() {
   const fd = new FormData();
   clips.forEach(f => fd.append('files', f, f.name));
   try {
-    const r = await fetch(serverUrl + '/train', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const r = await fetch(serverUrl + '/train', { method: 'POST', headers: { 'X-Voice-Token': token }, body: fd });
     const d = await r.json();
     const idEl = document.getElementById('trained-voice-id');
     if (d.ok) {
@@ -444,7 +444,7 @@ function initTrack() {
     if (!ip) { if (trackBox) trackBox.textContent = 'Enter an IP or domain.'; return; }
     if (trackBox) trackBox.textContent = 'Scanning...';
     try {
-      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Token': token } });
+      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Voice-Token': token } });
       const d = await r.json();
       if (d.error) { if (trackBox) trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
       const lines = ['IP: ' + d.ip_str, 'Org: ' + (d.org || 'N/A'), 'Country: ' + (d.country_name || 'N/A')];
@@ -472,7 +472,7 @@ async function analyzePDF(f, box) {
   const fd = new FormData();
   fd.append('file', f);
   try {
-    const r = await fetch(serverUrl + '/analyze_pdf', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const r = await fetch(serverUrl + '/analyze_pdf', { method: 'POST', headers: { 'X-Voice-Token': token }, body: fd });
     const d = await r.json();
     if (d.error) { if (box) box.textContent = 'Error: ' + d.error; addLog('warn', 'PDF: ' + d.error); return; }
     const lines = ['PDF: ' + f.name, 'Pages: ' + (d.pages || '?')];
@@ -494,14 +494,14 @@ function initLog() {
   if (!clearBtn) return;
   clearBtn.addEventListener('click', () => {
     logs = []; renderLog();
-    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
+    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
   });
 }
 
 function addLog(type, message) {
   const e = { type, message, time: new Date().toLocaleTimeString() };
   logs.unshift(e); if (logs.length > 200) logs.pop();
-  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
+  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
   renderLog();
 }
 
@@ -519,7 +519,7 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 async function checkConnection() {
   const el = document.getElementById('conn-status');
   try {
-    const r = await fetch(serverUrl + '/health', { headers: { 'X-Token': token } });
+    const r = await fetch(serverUrl + '/health', { headers: { 'X-Voice-Token': token } });
     if (el) el.style.color = r.ok ? '#06D6A0' : '#F72585';
   } catch {
     if (el) el.style.color = '#888';

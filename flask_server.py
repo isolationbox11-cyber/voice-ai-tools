@@ -5,7 +5,7 @@ Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status
 
 Env vars:
   GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
-  VOICE_SERVER_TOKEN    - shared secret (X-Token header) [optional in dev]
+  VOICE_SERVER_TOKEN    - shared secret (X-Voice-Token header) [optional in dev]
   SHODAN_API_KEY        - Shodan API key (optional)
   ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. chrome-extension://YOUR_ID)
   PORT                  - bind port (default 5001)
@@ -77,44 +77,47 @@ ALLOWED_ORIGINS = [
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
-CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Token"])
+CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Voice-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
         return True
-    return request.headers.get("X-Token", "") == VOICE_SERVER_TOKEN
+    return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
 
 # ── voice-settings resolution ─────────────────────────────────────────
-def _resolve_voice_settings(voice_id: str) -> dict:
-    if voice_id and voice_id.lower() == "cloned":
-        try:
-            custom = importlib.import_module("custom_voice_config")
-            fn = getattr(custom, "get_custom_voice_settings", None)
-            if callable(fn):
-                result = fn("cloned")
-                if isinstance(result, dict) and result:
-                    return result
-        except Exception:
-            pass
-
+def _resolve_voice_settings(call_type: str) -> dict:
     try:
-        if callable(_default_voice_fn):
-            result = _default_voice_fn(voice_id or "LEGITIMATE")
-            if isinstance(result, dict) and result:
-                return result
+        custom = importlib.import_module("custom_voice_config")
+        fn = getattr(custom, "get_custom_voice_settings", None)
+        if callable(fn):
+            result = fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", "en-US-Studio-O")
+                return resolved
     except Exception:
         pass
 
-    if voice_id and voice_id.lower() not in ("cloned", "default", ""):
-        return {"voice_id": voice_id}
-    return {"voice_id": "Kore"}
+    try:
+        if callable(_default_voice_fn):
+            result = _default_voice_fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = "en-US-Studio-O"
+                return resolved
+    except Exception:
+        pass
+
+    return {"voice_id": "en-US-Studio-O"}
 
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "model": _model_status(), "dev_mode": not bool(VOICE_SERVER_TOKEN)})
+    return jsonify({"status": "ok"})
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
@@ -122,20 +125,30 @@ def health():
 def tts():
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
     text = (data.get("text") or "").strip()
     if not text:
-        return jsonify({"error": "No text provided"}), 400
+        return jsonify({"error": "text is required"}), 400
     if len(text) > MAX_TEXT_LENGTH:
-        return jsonify({"error": "Text too long"}), 400
+        return jsonify({"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH} characters"}), 400
     if synthesize_speech is None:
         return jsonify({"error": "TTS engine not available — install google-genai"}), 503
     try:
-        voice_id = (data.get("voice_id") or "Kore").strip()
-        voice_settings = _resolve_voice_settings(voice_id)
+        call_type = data.get("call_type")
+        if isinstance(call_type, str):
+            call_type = (call_type.strip() or "LEGITIMATE").upper()
+        else:
+            call_type = "LEGITIMATE"
+        voice_settings = _resolve_voice_settings(call_type)
+        explicit_voice_id = data.get("voice_id")
+        if isinstance(explicit_voice_id, str) and explicit_voice_id.strip():
+            voice_settings = dict(voice_settings)
+            voice_settings["voice_id"] = explicit_voice_id.strip()
         audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
         if error:
-            return jsonify({"error": error}), 500
+            return jsonify({"error": error}), 502
         return Response(audio_bytes, mimetype=mime_type or "audio/wav")
     except Exception as e:
         return jsonify({"error": str(e)}), 500

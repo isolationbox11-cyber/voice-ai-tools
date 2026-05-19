@@ -25,7 +25,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Token": token || "",
+            "X-Voice-Token": token || "",
           },
           body: JSON.stringify({ text, call_type: callType, speed: speed || "normal" }),
         })
