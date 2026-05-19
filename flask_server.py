@@ -40,9 +40,12 @@ except ImportError:
     pdfplumber = None
 
 try:
-    from tts_engine import synthesize_speech
+    import tts_engine as _tts_engine
+    synthesize_speech = _tts_engine.synthesize_speech
+    TTS_MAX_TEXT_LENGTH = getattr(_tts_engine, "MAX_TEXT_LENGTH", 2000)
 except ImportError:
     synthesize_speech = None
+    TTS_MAX_TEXT_LENGTH = 2000
 
 try:
     from voice_config import get_voice_for_context as _default_voice_fn
@@ -52,7 +55,7 @@ except ImportError:
 # ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
-MAX_TEXT_LENGTH    = 2000
+MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")

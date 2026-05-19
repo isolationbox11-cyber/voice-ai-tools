@@ -186,9 +186,8 @@ Flask API.
   `debug_output_path` to `tts_engine.synthesize_speech()`.
 - Blob URLs created during audio playback are revoked immediately after the
   audio ends or errors – no object-URL leaks.
-- The Flask API accepts input text up to **2,000 characters**; text passed to
-  the TTS engine is truncated to **1,000 characters** to prevent runaway
-  synthesis requests.
+- The Flask API and TTS engine both enforce a maximum input of **2,000
+  characters**.
 - `custom_voice_config.py` and `voice_samples/` are excluded from git via
   `.gitignore`.
 
