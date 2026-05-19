@@ -526,14 +526,18 @@ function initLog() {
   if (!clearBtn) return;
   clearBtn.addEventListener('click', () => {
     logs = []; renderLog();
-    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
+    fetch(serverUrl + '/log/clear', { method: 'POST', headers: { 'X-Voice-Token': token } }).catch(() => {});
   });
 }
 
 function addLog(type, message) {
   const e = { type, message, time: new Date().toLocaleTimeString() };
   logs.unshift(e); if (logs.length > 200) logs.pop();
-  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
+  fetch(serverUrl + '/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token },
+    body: JSON.stringify({ action: type, text: message, timestamp: new Date().toISOString() })
+  }).catch(() => {});
   renderLog();
 }
 
