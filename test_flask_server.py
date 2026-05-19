@@ -56,16 +56,20 @@ def _patch_imports(monkeypatch):
 
 
 @pytest.fixture()
-def _reload_server(monkeypatch):
+def _clear_flask_server_module(monkeypatch):
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+    yield
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
+@pytest.fixture()
+def _reload_server(_clear_flask_server_module):
     """
     Reload flask_server after env/module patches so that module-level
     VOICE_SERVER_TOKEN is re-read from the environment.
     """
-    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
     import flask_server as srv
     yield srv
-    # Clean up so next test starts fresh
-    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -139,21 +143,17 @@ class TestCheckToken:
 
 
 class TestStartupTokenEnforcement:
-    def test_import_fails_in_production_without_token(self, monkeypatch):
+    def test_import_fails_in_production_without_token(self, monkeypatch, _clear_flask_server_module):
         monkeypatch.setenv("FLASK_ENV", "production")
         monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         with pytest.raises(RuntimeError, match="VOICE_SERVER_TOKEN must be set"):
             importlib.import_module("flask_server")
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
-    def test_import_succeeds_in_production_with_token(self, monkeypatch):
+    def test_import_succeeds_in_production_with_token(self, monkeypatch, _clear_flask_server_module):
         monkeypatch.setenv("FLASK_ENV", "production")
         monkeypatch.setenv("VOICE_SERVER_TOKEN", "prod-secret")
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         srv = importlib.import_module("flask_server")
         assert srv.VOICE_SERVER_TOKEN == "prod-secret"
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
 
 # ===========================================================================
