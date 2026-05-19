@@ -40,6 +40,11 @@ except ImportError:
     pdfplumber = None
 
 try:
+    import magic
+except ImportError:
+    magic = None
+
+try:
     from tts_engine import synthesize_speech
 except ImportError:
     synthesize_speech = None
@@ -96,6 +101,51 @@ def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
         return True
     return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
+
+def _is_audio_upload(file_storage) -> bool:
+    stream = getattr(file_storage, "stream", None)
+    if stream is None:
+        return False
+
+    try:
+        pos = stream.tell()
+    except Exception:
+        pos = 0
+
+    try:
+        header = stream.read(4096) or b""
+    finally:
+        try:
+            stream.seek(pos)
+        except Exception:
+            pass
+
+    if not header:
+        return False
+
+    detected_mime = ""
+    if magic is not None:
+        try:
+            detected_mime = (magic.from_buffer(header, mime=True) or "").lower()
+        except Exception:
+            detected_mime = ""
+    if detected_mime.startswith("audio/"):
+        return True
+
+    # Fallback magic-byte checks for common training clip formats.
+    if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
+        return True  # WAV
+    if header.startswith(b"ID3") or (len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+        return True  # MP3
+    if header.startswith(b"OggS"):
+        return True  # OGG
+    if header.startswith(b"fLaC"):
+        return True  # FLAC
+    if header.startswith(b"\x1A\x45\xDF\xA3"):
+        return True  # WebM/Matroska (audio/webm)
+    if len(header) >= 12 and header[4:8] == b"ftyp" and header[8:12] in {b"M4A ", b"M4B ", b"mp41", b"mp42", b"isom"}:
+        return True  # M4A/MP4 audio containers
+    return False
 
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(call_type: str) -> dict:
@@ -338,6 +388,10 @@ def train():
         fname = f.filename or f"clip_{int(time.time())}.wav"
         safe = re.sub(r'[^\w.\-]', '_', fname)
         safe = Path(safe).name
+        if not safe or safe.startswith("."):
+            return jsonify({"error": "Invalid filename"}), 400
+        if not _is_audio_upload(f):
+            return jsonify({"error": f"Invalid audio file: {safe}"}), 400
         dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
