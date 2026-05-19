@@ -138,6 +138,24 @@ class TestCheckToken:
             assert srv._check_token() is False
 
 
+class TestStartupTokenEnforcement:
+    def test_import_fails_in_production_without_token(self, monkeypatch):
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        with pytest.raises(RuntimeError, match="VOICE_SERVER_TOKEN must be set"):
+            importlib.import_module("flask_server")
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+    def test_import_succeeds_in_production_with_token(self, monkeypatch):
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("VOICE_SERVER_TOKEN", "prod-secret")
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        srv = importlib.import_module("flask_server")
+        assert srv.VOICE_SERVER_TOKEN == "prod-secret"
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
 # ===========================================================================
 # _resolve_voice_settings()
 # ===========================================================================
