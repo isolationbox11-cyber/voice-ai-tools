@@ -70,7 +70,10 @@ MODEL_DIR.mkdir(exist_ok=True)
 # To use your cloned voice, set CUSTOM_VOICE_ID in custom_voice_config.py.
 _GEMINI_DEFAULT_VOICE = "Kore"
 
+flask_env = os.environ.get("FLASK_ENV", "").strip().lower()
 if not VOICE_SERVER_TOKEN:
+    if flask_env == "production":
+        raise RuntimeError("VOICE_SERVER_TOKEN must be set when FLASK_ENV=production")
     print(
         "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
         "All protected endpoints are accessible without a token.\n"
@@ -93,7 +96,40 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 
 def _safe_public_error_message(raw_error) -> str:
     """Avoid returning stack traces or multi-line internals to clients."""
-    _ = raw_error
+    msg = str(raw_error or "").strip().lower()
+    if any(
+        token in msg
+        for token in (
+            "api key missing",
+            "missing api key",
+            "api key not configured",
+            "apikey missing",
+            "apikey not configured",
+            "invalid api key",
+            "api key invalid",
+            "unauthorized",
+            "authentication failed",
+        )
+    ):
+        return "API key not configured"
+    if any(
+        token in msg
+        for token in (
+            "voice model unavailable",
+            "voice model not found",
+            "voice not found",
+            "model not found",
+            "voice unavailable",
+            "model unavailable",
+            "unsupported voice",
+            "unsupported model",
+            "invalid voice",
+            "invalid model",
+        )
+    ):
+        return "Voice model unavailable"
+    if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
+        return "Request timed out"
     return "Speech synthesis failed"
 
 # ── auth ──────────────────────────────────────────────────────────────
