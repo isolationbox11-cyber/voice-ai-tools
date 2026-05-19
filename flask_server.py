@@ -57,6 +57,7 @@ PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
 SAMPLES_DIR        = Path("voice_samples")
+SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
@@ -238,6 +239,11 @@ def log_endpoint():
         json.dump({"entries": entries}, f, indent=2)
     return jsonify({"ok": True})
 
+def _filter_shodan_response(payload):
+    if not isinstance(payload, dict):
+        return {}
+    return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
+
 # ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
 @limiter.limit("10 per minute")
@@ -257,7 +263,7 @@ def shodan():
             params={"key": SHODAN_API_KEY},
             timeout=10
         )
-        return jsonify(r.json())
+        return jsonify(_filter_shodan_response(r.json()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
