@@ -165,7 +165,7 @@ Flask API.
 | Variable | Default | Description |
 |---|---|---|
 | `GOOGLE_API_KEY` | *(required)* | Google GenAI API key |
-| `VOICE_SERVER_TOKEN` | *(required)* | Shared secret for `X-Token` header – all protected endpoints return 401 when unset |
+| `VOICE_SERVER_TOKEN` | *(required)* | Shared secret for `X-Voice-Token` header – all protected endpoints return 401 when unset |
 | `PORT` | `5000` | Bind port |
 | `HOST` | `127.0.0.1` | Bind host – only honoured when `ALLOW_NETWORK_BINDING=1` |
 | `ALLOW_NETWORK_BINDING` | *(unset)* | Set to `1` to permit binding to non-loopback addresses (logs a warning) |

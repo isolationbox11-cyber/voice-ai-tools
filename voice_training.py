@@ -42,7 +42,7 @@ def _convert_to_wav(src: Path, dst: Path) -> bool:
         return False
 
 
-# ── train_from_samples ────────────────────────────────────────────
+# ── train_from_samples ────────────────────────────────────────────────
 # Called by flask_server.py /train endpoint.
 # Takes the recorded audio clips and trains a real Coqui XTTS v2
 # speaker embedding. No API key required — runs 100% locally.
@@ -113,8 +113,7 @@ def train_from_samples(sample_paths: list) -> str | None:
         }
         embedding_path.write_text(json.dumps(embedding_data))
         print(f"Speaker embedding saved to {embedding_path}")
-        # FIX: write voice config on successful training so the cloned voice
-        # is immediately available via flask_server._resolve_voice_settings()
+        # Write voice config so cloned voice is immediately available
         _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
     except Exception as e:
         print(f"Embedding extraction failed ({e}), falling back to sample paths.")
@@ -127,6 +126,42 @@ def train_from_samples(sample_paths: list) -> str | None:
         _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
 
     print(f"Voice training complete. Voice ID: {voice_id}")
+    return voice_id
+
+
+# ── register_wav_reference ────────────────────────────────────────────
+def register_wav_reference(wav_path: str) -> str | None:
+    """Register a pre-existing WAV file as the cloned voice reference.
+
+    No training step is needed. The WAV is used directly as Coqui's
+    speaker_wav for zero-shot voice cloning on every TTS request.
+
+    Args:
+        wav_path: Absolute or relative path to a .wav file on disk.
+                  Should be at least 6 seconds of clean speech for best quality.
+
+    Returns:
+        voice_id string (wav_ref_<timestamp>) on success, or None on failure.
+    """
+    p = Path(wav_path).resolve()
+    if not p.exists():
+        print(f"register_wav_reference: file not found: {p}")
+        return None
+    if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
+        print(f"register_wav_reference: unsupported extension {p.suffix}")
+        return None
+
+    # If non-WAV, convert first so Coqui gets a clean PCM file
+    if p.suffix.lower() != ".wav":
+        converted = p.with_suffix(".wav")
+        if not _convert_to_wav(p, converted):
+            print(f"register_wav_reference: ffmpeg conversion failed for {p.name}")
+            return None
+        p = converted
+
+    voice_id = f"wav_ref_{int(time.time())}"
+    _write_voice_config(voice_id, [str(p)], engine="wav_reference")
+    print(f"WAV reference registered. voice_id={voice_id}, path={p}")
     return voice_id
 
 
@@ -161,7 +196,8 @@ def get_custom_voice_settings(context):
     print(f"custom_voice_config.py written — voice_id={voice_id}, engine={engine}")
 
 
-# ── synthesize_with_cloned_voice ────────────────────────────────────
+# ── synthesize_with_cloned_voice ─────────────────────────────────────
+# Path A: uses saved Coqui speaker embedding tensors (from /train).
 def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     """Synthesize speech using the saved Coqui speaker embedding.
 
@@ -202,4 +238,58 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
         return buf.read()
     except Exception as e:
         print(f"Coqui synthesis failed: {e}")
+        return None
+
+
+# ── synthesize_from_wav_reference ─────────────────────────────────────
+# Path B: zero-shot cloning from a pre-stored WAV file.
+# No training step — Coqui's tts_to_file() uses the WAV as speaker_wav.
+def synthesize_from_wav_reference(text: str, wav_path: str) -> bytes | None:
+    """Synthesize speech using a stored WAV file as the voice reference.
+
+    Uses Coqui XTTS v2 zero-shot cloning: the WAV is passed as
+    speaker_wav directly, no embedding pre-computation needed.
+
+    Args:
+        text:     Text to synthesize.
+        wav_path: Path to the reference .wav file on disk.
+
+    Returns:
+        Raw WAV bytes on success, or None on failure.
+    """
+    ref = Path(wav_path)
+    if not ref.exists():
+        print(f"synthesize_from_wav_reference: reference WAV not found: {ref}")
+        return None
+
+    model = _get_coqui_model()
+    if model is None:
+        print("synthesize_from_wav_reference: Coqui model not available.")
+        return None
+
+    try:
+        import io
+        import tempfile
+        import soundfile as sf
+
+        # tts_to_file writes to a path; we use a temp file then read bytes back
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        model.tts_to_file(
+            text=text,
+            speaker_wav=str(ref),
+            language="en",
+            file_path=tmp_path,
+        )
+        wav_bytes = Path(tmp_path).read_bytes()
+        Path(tmp_path).unlink(missing_ok=True)
+        return wav_bytes
+    except Exception as e:
+        print(f"synthesize_from_wav_reference failed: {e}")
+        # Clean up temp file if it exists
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except Exception:
+            pass
         return None

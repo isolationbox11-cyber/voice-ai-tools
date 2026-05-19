@@ -162,6 +162,18 @@ function initVoice() {
   });
 }
 
+/**
+ * Route TTS through background.js -> offscreen.js so playback
+ * survives popup closure.
+ *
+ * UI state ownership:
+ *   'Sending...'  — set here while the fetch is in-flight
+ *   ''            — cleared here on fetch ACK (ok:true); offscreen events take over
+ *   'Error: ...'  — set here on fetch failure (ok:false or lastError)
+ *   'Playing...'  — set by AUDIO_PLAYBACK_COMPLETE listener below (audio started)
+ *   'Done'        — set by AUDIO_PLAYBACK_COMPLETE listener below
+ *   'Playback error: ...' — set by AUDIO_PLAYBACK_ERROR listener below
+ */
 async function speakText(cloned, silent) {
   const txt = document.getElementById('tts-text');
   const statusEl = document.getElementById('voice-status');
@@ -169,33 +181,53 @@ async function speakText(cloned, silent) {
   const text = txt ? txt.value.trim() : '';
   if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
   if (!silent && speakBtn) speakBtn.disabled = true;
-  if (statusEl && !silent) statusEl.textContent = 'Speaking...';
+  // 'Sending...' while the network request is in-flight.
+  // Never 'Playing...' here — that comes from AUDIO_PLAYBACK_COMPLETE.
+  if (statusEl && !silent) statusEl.textContent = 'Sending...';
   const speed = document.getElementById('voice-speed');
-  try {
-    const r = await fetch(serverUrl + '/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Token': token },
-      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'Kore', speed: speed ? speed.value : 'normal' })
-    });
-    if (!r.ok) {
-      const e = await r.json();
-      if (statusEl) statusEl.textContent = 'Error: ' + (e.error || r.status);
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: 'TTS_REQUEST',
+      text,
+      token,
+      serverUrl,
+      callType: cloned ? 'cloned' : 'stock',
+      voiceId: cloned ? 'cloned' : 'Kore',
+      speed: speed ? speed.value : 'normal',
+    }, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        // Extension messaging error (e.g. service worker not running)
+        if (statusEl && !silent) statusEl.textContent = 'Extension error: ' + err.message;
+        addLog('warn', 'TTS extension error: ' + err.message);
+      } else if (response && !response.ok) {
+        // Fetch or HTTP error from background.js — playback will never start
+        if (statusEl && !silent) statusEl.textContent = 'Error: ' + (response.error || 'unknown');
+        addLog('warn', 'TTS error: ' + (response.error || 'unknown'));
+      } else {
+        // Fetch succeeded; audio bytes are on their way to offscreen.
+        // Clear the in-flight status — AUDIO_PLAYBACK_COMPLETE will set 'Playing...'
+        if (statusEl && !silent) statusEl.textContent = '';
+        addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
+      }
       if (!silent && speakBtn) speakBtn.disabled = false;
-      return;
-    }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); if (!silent && statusEl) statusEl.textContent = 'Done'; };
-    audio.onerror = () => { URL.revokeObjectURL(url); if (statusEl) statusEl.textContent = 'Playback error'; };
-    await audio.play();
-    addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
-  } catch (e) {
-    if (statusEl) statusEl.textContent = 'Error -- is Flask running on port 5001?';
-    addLog('warn', 'Voice error: ' + e.message);
-  }
-  if (!silent && speakBtn) speakBtn.disabled = false;
+      resolve();
+    });
+  });
 }
+
+// Offscreen events own the final playback UI state.
+// These fire whether or not the popup is the one that initiated the request.
+chrome.runtime.onMessage.addListener((message) => {
+  const statusEl = document.getElementById('voice-status');
+  if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {
+    if (statusEl) statusEl.textContent = 'Done';
+  } else if (message.type === 'AUDIO_PLAYBACK_ERROR') {
+    if (statusEl) statusEl.textContent = 'Playback error: ' + (message.error || 'unknown');
+    addLog('warn', 'Playback error: ' + (message.error || 'unknown'));
+  }
+});
 
 // -- train tab (karaoke)
 function initTrain() {
@@ -245,7 +277,7 @@ function initTrain() {
   if (checkBtn) checkBtn.addEventListener('click', async () => {
     const status = document.getElementById('train-status');
     try {
-      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Token': token } });
+      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Voice-Token': token } });
       const d = await r.json();
       const idEl = document.getElementById('trained-voice-id');
       if (d.trained) {
@@ -409,7 +441,7 @@ async function submitTraining() {
   const fd = new FormData();
   clips.forEach(f => fd.append('files', f, f.name));
   try {
-    const r = await fetch(serverUrl + '/train', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const r = await fetch(serverUrl + '/train', { method: 'POST', headers: { 'X-Voice-Token': token }, body: fd });
     const d = await r.json();
     const idEl = document.getElementById('trained-voice-id');
     if (d.ok) {
@@ -444,7 +476,7 @@ function initTrack() {
     if (!ip) { if (trackBox) trackBox.textContent = 'Enter an IP or domain.'; return; }
     if (trackBox) trackBox.textContent = 'Scanning...';
     try {
-      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Token': token } });
+      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Voice-Token': token } });
       const d = await r.json();
       if (d.error) { if (trackBox) trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
       const lines = ['IP: ' + d.ip_str, 'Org: ' + (d.org || 'N/A'), 'Country: ' + (d.country_name || 'N/A')];
@@ -472,7 +504,7 @@ async function analyzePDF(f, box) {
   const fd = new FormData();
   fd.append('file', f);
   try {
-    const r = await fetch(serverUrl + '/analyze_pdf', { method: 'POST', headers: { 'X-Token': token }, body: fd });
+    const r = await fetch(serverUrl + '/analyze_pdf', { method: 'POST', headers: { 'X-Voice-Token': token }, body: fd });
     const d = await r.json();
     if (d.error) { if (box) box.textContent = 'Error: ' + d.error; addLog('warn', 'PDF: ' + d.error); return; }
     const lines = ['PDF: ' + f.name, 'Pages: ' + (d.pages || '?')];
@@ -494,14 +526,14 @@ function initLog() {
   if (!clearBtn) return;
   clearBtn.addEventListener('click', () => {
     logs = []; renderLog();
-    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
+    fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ action: 'clear' }) }).catch(() => {});
   });
 }
 
 function addLog(type, message) {
   const e = { type, message, time: new Date().toLocaleTimeString() };
   logs.unshift(e); if (logs.length > 200) logs.pop();
-  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
+  fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
   renderLog();
 }
 
@@ -519,7 +551,7 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 async function checkConnection() {
   const el = document.getElementById('conn-status');
   try {
-    const r = await fetch(serverUrl + '/health', { headers: { 'X-Token': token } });
+    const r = await fetch(serverUrl + '/health', { headers: { 'X-Voice-Token': token } });
     if (el) el.style.color = r.ok ? '#06D6A0' : '#F72585';
   } catch {
     if (el) el.style.color = '#888';
