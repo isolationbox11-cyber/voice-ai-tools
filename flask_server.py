@@ -89,18 +89,34 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 def _safe_public_error_message(raw_error) -> str:
     """Avoid returning stack traces or multi-line internals to clients."""
     msg = str(raw_error or "").strip().lower()
-    if any(token in msg for token in ("api key", "apikey", "key missing", "key not configured", "unauthorized")):
+    if any(
+        token in msg
+        for token in (
+            "api key missing",
+            "missing api key",
+            "api key not configured",
+            "apikey missing",
+            "apikey not configured",
+            "invalid api key",
+            "api key invalid",
+            "unauthorized",
+            "authentication failed",
+        )
+    ):
         return "API key not configured"
     if any(
         token in msg
         for token in (
-            "voice model",
+            "voice model unavailable",
+            "voice model not found",
             "voice not found",
             "model not found",
             "voice unavailable",
             "model unavailable",
             "unsupported voice",
             "unsupported model",
+            "invalid voice",
+            "invalid model",
         )
     ):
         return "Voice model unavailable"
