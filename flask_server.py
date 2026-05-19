@@ -113,7 +113,7 @@ def _is_audio_upload(file_storage) -> bool:
         pos = 0
 
     try:
-        header = stream.read(4096) or b""
+        header = stream.read(512) or b""
     finally:
         try:
             stream.seek(pos)
@@ -135,15 +135,17 @@ def _is_audio_upload(file_storage) -> bool:
     # Fallback magic-byte checks for common training clip formats.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
         return True  # WAV
-    if header.startswith(b"ID3") or (len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
-        return True  # MP3
+    if header.startswith(b"ID3"):
+        return True  # MP3 (ID3-tagged)
+    if len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+        return True  # MP3 (raw frame sync)
     if header.startswith(b"OggS"):
         return True  # OGG
     if header.startswith(b"fLaC"):
         return True  # FLAC
     if header.startswith(b"\x1A\x45\xDF\xA3"):
         return True  # WebM/Matroska (audio/webm)
-    if len(header) >= 12 and header[4:8] == b"ftyp" and header[8:12] in {b"M4A ", b"M4B ", b"mp41", b"mp42", b"isom"}:
+    if len(header) >= 12 and header[4:8] == b"ftyp" and header[8:12] in {b"M4A ", b"M4B "}:
         return True  # M4A/MP4 audio containers
     return False
 
