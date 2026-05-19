@@ -60,6 +60,11 @@ SAMPLES_DIR        = Path("voice_samples")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
+# Default Gemini PrebuiltVoiceConfig name used when no custom voice is configured.
+# Must be a valid Gemini prebuilt voice (e.g. Kore, Puck, Charon, Aoede, Fenrir).
+# To use your cloned voice, set CUSTOM_VOICE_ID in custom_voice_config.py.
+_GEMINI_DEFAULT_VOICE = "Kore"
+
 if not VOICE_SERVER_TOKEN:
     print(
         "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
@@ -94,6 +99,15 @@ def _check_token() -> bool:
 
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(call_type: str) -> dict:
+    """
+    Resolution order:
+      1. custom_voice_config.get_custom_voice_settings(call_type)  — your cloned voice
+      2. voice_config.get_voice_for_context(call_type)             — repo defaults
+      3. Hard fallback: Kore (valid Gemini PrebuiltVoiceConfig name)
+
+    'en-US-Studio-O' is a Google Cloud TTS v1 voice and is NOT compatible
+    with the Gemini TTS API used by tts_engine.synthesize_speech.
+    """
     try:
         custom = importlib.import_module("custom_voice_config")
         fn = getattr(custom, "get_custom_voice_settings", None)
@@ -102,7 +116,8 @@ def _resolve_voice_settings(call_type: str) -> dict:
             if isinstance(result, dict):
                 resolved = dict(result)
                 if not resolved.get("voice_id"):
-                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", "en-US-Studio-O")
+                    # Fall back to CUSTOM_VOICE_ID attr, then Kore — never en-US-Studio-O
+                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
                 return resolved
     except Exception:
         pass
@@ -113,12 +128,12 @@ def _resolve_voice_settings(call_type: str) -> dict:
             if isinstance(result, dict):
                 resolved = dict(result)
                 if not resolved.get("voice_id"):
-                    resolved["voice_id"] = "en-US-Studio-O"
+                    resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
                 return resolved
     except Exception:
         pass
 
-    return {"voice_id": "en-US-Studio-O"}
+    return {"voice_id": _GEMINI_DEFAULT_VOICE}
 
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
