@@ -13,7 +13,7 @@ Env vars:
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-import os, io, re, json, time, wave, tempfile, importlib, sys
+import os, io, re, json, time, wave, tempfile, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -53,10 +53,12 @@ except ImportError:
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = 2000
+MAX_LOG_ENTRY_SIZE = 2048
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
 SAMPLES_DIR        = Path("voice_samples")
+PRESET_WRITE_LOCK  = threading.Lock()
 SERVER_START_TIME  = time.time()
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
@@ -127,6 +129,38 @@ def _safe_public_error_message(raw_error) -> str:
     if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
         return "Request timed out"
     return "Speech synthesis failed"
+
+
+def _validate_log_entry(data):
+    if not isinstance(data, dict):
+        return None, "Invalid JSON body"
+
+    allowed_keys = {"action", "timestamp", "text"}
+    unknown_keys = set(data.keys()) - allowed_keys
+    if unknown_keys:
+        return None, f"Unknown fields: {', '.join(sorted(unknown_keys))}"
+
+    action = data.get("action")
+    text = data.get("text")
+    timestamp = data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    if not isinstance(action, str) or not action.strip():
+        return None, "action is required"
+    if not isinstance(text, str) or not text.strip():
+        return None, "text is required"
+    if not isinstance(timestamp, str) or not timestamp.strip():
+        return None, "timestamp must be a non-empty string"
+
+    entry = {
+        "action": action.strip(),
+        "timestamp": timestamp.strip(),
+        "text": text.strip(),
+    }
+
+    if len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) > MAX_LOG_ENTRY_SIZE:
+        return None, f"log entry exceeds maximum size of {MAX_LOG_ENTRY_SIZE} bytes"
+
+    return entry, None
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
@@ -237,17 +271,18 @@ def presets():
     data = request.get_json(silent=True)
     if not data or not data.get("name"):
         return jsonify({"error": "Preset needs a name"}), 400
-    presets_list = []
-    if PRESET_PATH.exists():
-        with open(PRESET_PATH) as f:
-            presets_list = json.load(f).get("presets", [])
-    existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
-    if existing is not None:
-        presets_list[existing] = data
-    else:
-        presets_list.append(data)
-    with open(PRESET_PATH, "w") as f:
-        json.dump({"presets": presets_list}, f, indent=2)
+    with PRESET_WRITE_LOCK:
+        presets_list = []
+        if PRESET_PATH.exists():
+            with open(PRESET_PATH) as f:
+                presets_list = json.load(f).get("presets", [])
+        existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
+        if existing is not None:
+            presets_list[existing] = data
+        else:
+            presets_list.append(data)
+        with open(PRESET_PATH, "w") as f:
+            json.dump({"presets": presets_list}, f, indent=2)
     return jsonify({"ok": True})
 
 # ── /log ──────────────────────────────────────────────────────────────
@@ -262,7 +297,9 @@ def log_endpoint():
                 return jsonify(json.load(f))
         except Exception:
             return jsonify({"entries": []})
-    entry = request.get_json(silent=True) or {}
+    entry, error = _validate_log_entry(request.get_json(silent=True))
+    if error:
+        return jsonify({"error": error}), 400
     entries = []
     if LOG_PATH.exists():
         try:
@@ -270,15 +307,21 @@ def log_endpoint():
                 entries = json.load(f).get("entries", [])
         except Exception:
             pass
-    if entry.get("action") == "clear":
-        entries = []
-    else:
-        entry["timestamp"] = entry.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
-        entries.insert(0, entry)
-        if len(entries) > 500:
-            entries = entries[:500]
+    entries.insert(0, entry)
+    if len(entries) > 500:
+        entries = entries[:500]
     with open(LOG_PATH, "w") as f:
         json.dump({"entries": entries}, f, indent=2)
+    return jsonify({"ok": True})
+
+
+@app.route("/log/clear", methods=["POST"])
+@limiter.limit("30 per minute")
+def clear_log_endpoint():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    with open(LOG_PATH, "w") as f:
+        json.dump({"entries": []}, f, indent=2)
     return jsonify({"ok": True})
 
 # ── /shodan ───────────────────────────────────────────────────────────

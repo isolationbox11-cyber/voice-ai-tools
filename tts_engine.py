@@ -18,6 +18,7 @@ unless debug_output_path is provided.
 
 import logging
 import os
+import threading
 from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -25,18 +26,21 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_LENGTH = 1000
 _TTS_MODEL = "gemini-2.5-flash-preview-tts"
 _genai_client = None
+_client_lock = threading.Lock()
 
 
 def _get_client():
     global _genai_client
     if _genai_client is None:
-        try:
-            from google import genai
-            api_key = os.environ.get("GOOGLE_API_KEY")
-            _genai_client = genai.Client(api_key=api_key) if api_key else genai.Client()
-        except Exception as e:
-            logger.error("Failed to create GenAI client: %s", e)
-            raise
+        with _client_lock:
+            if _genai_client is None:
+                try:
+                    from google import genai
+                    api_key = os.environ.get("GOOGLE_API_KEY")
+                    _genai_client = genai.Client(api_key=api_key) if api_key else genai.Client()
+                except Exception as e:
+                    logger.error("Failed to create GenAI client: %s", e)
+                    raise
     return _genai_client
 
 
