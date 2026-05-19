@@ -8,6 +8,8 @@ Tests for flask_server.py – covers changes introduced in this PR:
 """
 
 import importlib
+import io
+import json
 import sys
 import types
 from pathlib import Path
@@ -648,7 +650,7 @@ class TestLogEndpoint:
             assert log_resp.status_code == 200
             assert log_resp.get_json() == {"entries": []}
 
-
+ 
 # ===========================================================================
 # /shodan
 # ===========================================================================
@@ -711,3 +713,44 @@ class TestShodanEndpoint:
             resp = c.get("/shodan?ip=1.2.3.4")
             assert resp.status_code == 200
             assert resp.get_json() == {}
+
+# ===========================================================================
+# POST /train
+# ===========================================================================
+
+class TestTrainEndpoint:
+    def test_training_exception_is_sanitized_in_response_and_manifest(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+
+        failing_training = types.ModuleType("voice_training")
+
+        def _raise_training_error(_sample_paths):
+            raise RuntimeError(f"failed reading {tmp_path}/very/secret/path.wav")
+
+        failing_training.train_from_samples = _raise_training_error
+        monkeypatch.setitem(sys.modules, "voice_training", failing_training)
+
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(b"fake wav bytes"), "sample.wav")},
+                content_type="multipart/form-data",
+            )
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] == "training_failed"
+        assert body["error"] == "Training failed. Check server logs."
+        assert str(tmp_path) not in body["error"]
+
+        manifest = json.loads((srv.MODEL_DIR / "manifest.json").read_text())
+        assert manifest["status"] == "training_failed"
+        assert manifest["error"] == "Training failed. Check server logs."
