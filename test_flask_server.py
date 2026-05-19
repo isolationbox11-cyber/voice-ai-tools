@@ -234,17 +234,29 @@ class TestHealthEndpoint:
         assert isinstance(data["api_key_configured"], bool)
         assert isinstance(data["auth_enabled"], bool)
         assert data["tts_engine"]
-        assert not data["api_key_configured"]
-        assert not data["auth_enabled"]
         assert isinstance(data["uptime_seconds"], int)
         assert data["uptime_seconds"] >= 0
+
+    def test_reflects_unconfigured_env(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        try:
+            import flask_server as srv
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["api_key_configured"] is False
+                assert data["auth_enabled"] is False
+        finally:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
     def test_reflects_env_and_auth_configuration(self, monkeypatch):
         monkeypatch.setenv("GOOGLE_API_KEY", "abc123")
         monkeypatch.setenv("VOICE_SERVER_TOKEN", "secret123")
         original_srv = sys.modules.get("flask_server")
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         try:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
             import flask_server as srv
             srv.app.config["TESTING"] = True
             with srv.app.test_client() as c:
@@ -261,15 +273,13 @@ class TestHealthEndpoint:
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         import flask_server as srv
 
-        original_synthesize = srv.synthesize_speech
         try:
-            srv.synthesize_speech = None
+            monkeypatch.setattr(srv, "synthesize_speech", None)
             srv.app.config["TESTING"] = True
             with srv.app.test_client() as c:
                 data = c.get("/health").get_json()
                 assert data["tts_engine"] is False
         finally:
-            srv.synthesize_speech = original_synthesize
             monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
     def test_content_type_json(self, client_no_token):
