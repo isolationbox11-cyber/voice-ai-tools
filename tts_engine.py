@@ -2,9 +2,15 @@
 """
 TTS Engine - Text-to-Speech synthesis.
 
-Routing logic:
-  - voice_id starts with 'local_voice_' -> Coqui XTTS v2 (local, no API key)
-  - anything else                       -> Google Gemini TTS
+Routing logic (in priority order):
+  1. voice_id starts with 'local_voice_'  -> Path A: Coqui XTTS v2 embedding
+                                             (trained via /train endpoint)
+  2. voice_id starts with 'wav_ref_'      -> Path B: Coqui XTTS v2 zero-shot
+                                             (pre-stored WAV reference file)
+  3. anything else                         -> Google Gemini TTS (prebuilt voice)
+
+For paths A and B, Coqui runs 100% locally — no API key needed.
+Both fall back to Gemini 'Kore' if Coqui synthesis fails.
 
 Privacy-first: audio bytes returned in-memory, never written to disk
 unless debug_output_path is provided.
@@ -43,6 +49,11 @@ def synthesize_speech(
 
     Returns (audio_bytes, mime_type, error_message, effective_text).
     On failure, audio_bytes is None and error_message describes the problem.
+
+    voice_settings keys used:
+      voice_id  (str) — determines routing (see module docstring)
+      engine    (str) — optional hint; 'wav_reference' triggers Path B lookup
+      CUSTOM_VOICE_SAMPLES[0] is used as the WAV path for Path B
     """
     if not text or not text.strip():
         return None, "", "Empty text provided", text
@@ -52,10 +63,11 @@ def synthesize_speech(
         text = text[:MAX_TEXT_LENGTH]
 
     voice_id = (voice_settings.get("voice_id") or "Kore").strip()
+    engine   = (voice_settings.get("engine") or "").strip()
 
-    # ── Route to Coqui XTTS v2 for locally trained voices ──────────────────
+    # ── Path A: Coqui embedding (trained via /train) ───────────────────────
     if voice_id.startswith("local_voice_"):
-        logger.info("Routing to Coqui XTTS v2 for cloned voice: %s", voice_id)
+        logger.info("Path A — Coqui embedding for voice: %s", voice_id)
         try:
             from voice_training import synthesize_with_cloned_voice
             audio_bytes = synthesize_with_cloned_voice(text, voice_id)
@@ -64,14 +76,49 @@ def synthesize_speech(
                     with open(debug_output_path, "wb") as fh:
                         fh.write(audio_bytes)
                 return audio_bytes, "audio/wav", None, text
-            else:
-                logger.warning("Coqui synthesis returned None, falling back to Gemini Kore.")
-                voice_id = "Kore"  # fall through to Gemini below
+            logger.warning("Path A returned None — falling back to Gemini Kore.")
+            voice_id = "Kore"
         except Exception as e:
-            logger.error("Coqui synthesis error: %s", e)
-            voice_id = "Kore"  # fall through to Gemini below
+            logger.error("Path A Coqui error: %s", e)
+            voice_id = "Kore"
 
-    # ── Gemini TTS for stock / preset voices ──────────────────────────────
+    # ── Path B: Coqui zero-shot from stored WAV reference ─────────────────
+    elif voice_id.startswith("wav_ref_") or engine == "wav_reference":
+        logger.info("Path B — WAV reference zero-shot for voice: %s", voice_id)
+        wav_path = None
+
+        # First, try to get the WAV path from custom_voice_config
+        try:
+            import importlib
+            cvc = importlib.import_module("custom_voice_config")
+            samples = getattr(cvc, "CUSTOM_VOICE_SAMPLES", [])
+            if samples:
+                wav_path = samples[0]
+        except Exception:
+            pass
+
+        # Fallback: check voice_settings itself for a wav_path key
+        if not wav_path:
+            wav_path = voice_settings.get("wav_path") or voice_settings.get("sample_path")
+
+        if wav_path:
+            try:
+                from voice_training import synthesize_from_wav_reference
+                audio_bytes = synthesize_from_wav_reference(text, wav_path)
+                if audio_bytes:
+                    if debug_output_path:
+                        with open(debug_output_path, "wb") as fh:
+                            fh.write(audio_bytes)
+                    return audio_bytes, "audio/wav", None, text
+                logger.warning("Path B returned None — falling back to Gemini Kore.")
+            except Exception as e:
+                logger.error("Path B WAV reference error: %s", e)
+        else:
+            logger.warning("Path B: no WAV path found in custom_voice_config or voice_settings — falling back.")
+
+        voice_id = "Kore"  # fall through to Gemini
+
+    # ── Path C: Gemini TTS (prebuilt / stock voices) ───────────────────────
     try:
         from google.genai import types as genai_types
         client = _get_client()
