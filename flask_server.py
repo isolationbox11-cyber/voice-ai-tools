@@ -80,6 +80,15 @@ app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Voice-Token"])
 limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
+
+def _safe_public_error_message(raw_error) -> str:
+    """Avoid returning stack traces or multi-line internals to clients."""
+    if isinstance(raw_error, str):
+        msg = raw_error.strip()
+        if re.fullmatch(r"[A-Za-z0-9 ,.'\"()_:-]{1,120}", msg):
+            return msg
+    return "Speech synthesis failed"
+
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
@@ -148,7 +157,7 @@ def tts():
             voice_settings["voice_id"] = explicit_voice_id.strip()
         audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
         if error:
-            return jsonify({"error": error}), 502
+            return jsonify({"error": _safe_public_error_message(error)}), 502
         return Response(audio_bytes, mimetype=mime_type or "audio/wav")
     except Exception as e:
         print(f"TTS request failed: {e}", file=sys.stderr)
