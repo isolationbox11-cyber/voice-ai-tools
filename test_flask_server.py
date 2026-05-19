@@ -240,15 +240,15 @@ class TestHealthEndpoint:
         monkeypatch.setenv("GOOGLE_API_KEY", "abc123")
         monkeypatch.setenv("VOICE_SERVER_TOKEN", "secret123")
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
-        import flask_server as srv
-
-        srv.app.config["TESTING"] = True
-        with srv.app.test_client() as c:
-            data = c.get("/health").get_json()
-            assert data["api_key_configured"] is True
-            assert data["auth_enabled"] is True
-
-        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        try:
+            import flask_server as srv
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["api_key_configured"] is True
+                assert data["auth_enabled"] is True
+        finally:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
     def test_content_type_json(self, client_no_token):
         response = client_no_token.get("/health")
