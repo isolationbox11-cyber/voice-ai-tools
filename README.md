@@ -113,10 +113,8 @@ Falls back to `window.speechSynthesis` when no audio payload is present.
 export VOICE_SERVER_TOKEN="choose-a-strong-random-secret"
 ```
 
-> **`VOICE_SERVER_TOKEN` is required.**  If it is not set, all requests to
-> protected endpoints (`/tts`, `/presets`, `/log`, `/shodan`, `/analyze_pdf`,
-> `/train`, `/model_status`) are rejected with HTTP 401.  Only `/health` is
-> always accessible.
+> **`VOICE_SERVER_TOKEN` is required in production.** If `FLASK_ENV=production`
+> and the token is not set, the server exits at startup.
 
 ### 5b. Start the Flask server
 
@@ -165,7 +163,7 @@ Flask API.
 | Variable | Default | Description |
 |---|---|---|
 | `GOOGLE_API_KEY` | *(required)* | Google GenAI API key |
-| `VOICE_SERVER_TOKEN` | *(required)* | Shared secret for `X-Voice-Token` header – all protected endpoints return 401 when unset |
+| `VOICE_SERVER_TOKEN` | *(required in production)* | Shared secret for `X-Voice-Token` header; startup fails when unset and `FLASK_ENV=production` |
 | `PORT` | `5000` | Bind port |
 | `HOST` | `127.0.0.1` | Bind host – only honoured when `ALLOW_NETWORK_BINDING=1` |
 | `ALLOW_NETWORK_BINDING` | *(unset)* | Set to `1` to permit binding to non-loopback addresses (logs a warning) |
@@ -177,8 +175,8 @@ Flask API.
 
 - The Flask server binds to `127.0.0.1` only – not reachable from the network
   unless you explicitly set `ALLOW_NETWORK_BINDING=1`.
-- **`VOICE_SERVER_TOKEN` is required** for all protected endpoints.  Without it
-  the server still starts, but every protected request is rejected with 401.
+- **`VOICE_SERVER_TOKEN` is required in production**. If `FLASK_ENV=production`
+  and the token is unset, startup fails with a clear error.
 - CORS allows only `http://127.0.0.1:5000` and `http://localhost:5000` by
   default.  No wildcard or `"null"` origins are permitted.  Add trusted
   extension origins via `ALLOWED_ORIGINS` if needed.
