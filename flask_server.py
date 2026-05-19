@@ -91,7 +91,18 @@ def _safe_public_error_message(raw_error) -> str:
     msg = str(raw_error or "").strip().lower()
     if any(token in msg for token in ("api key", "apikey", "key missing", "key not configured", "unauthorized")):
         return "API key not configured"
-    if any(token in msg for token in ("voice", "model", "not found", "unavailable", "unsupported")):
+    if any(
+        token in msg
+        for token in (
+            "voice model",
+            "voice not found",
+            "model not found",
+            "voice unavailable",
+            "model unavailable",
+            "unsupported voice",
+            "unsupported model",
+        )
+    ):
         return "Voice model unavailable"
     if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
         return "Request timed out"
