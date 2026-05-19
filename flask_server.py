@@ -83,10 +83,7 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 
 def _safe_public_error_message(raw_error) -> str:
     """Avoid returning stack traces or multi-line internals to clients."""
-    if isinstance(raw_error, str):
-        msg = raw_error.strip()
-        if re.fullmatch(r"[A-Za-z0-9 ,.'\"()_:-]{1,120}", msg):
-            return msg
+    _ = raw_error
     return "Speech synthesis failed"
 
 # ── auth ──────────────────────────────────────────────────────────────
