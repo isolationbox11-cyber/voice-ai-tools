@@ -238,6 +238,21 @@ class TestHealthEndpoint:
             else:
                 monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
+    def test_reports_tts_engine_unavailable(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        original_synthesize = srv.synthesize_speech
+        try:
+            srv.synthesize_speech = None
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["tts_engine"] is False
+        finally:
+            srv.synthesize_speech = original_synthesize
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
     def test_content_type_json(self, client_no_token):
         response = client_no_token.get("/health")
         assert "application/json" in response.content_type
