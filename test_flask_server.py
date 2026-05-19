@@ -444,6 +444,8 @@ class TestTtsEndpoint:
             assert resp.status_code == 200
             assert resp.data == b"FAKE_AUDIO"
             assert "audio/wav" in resp.content_type
+            resp_mixed_case = c.post("/tts", json={"text": "hello", "call_type": "cloned", "voice_id": "ClOnEd"})
+            assert resp_mixed_case.status_code == 200
 
         assert captured["voice_id"] == "local_voice_123"
 
