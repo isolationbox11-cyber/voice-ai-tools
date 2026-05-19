@@ -178,15 +178,20 @@ async function speakText(cloned, silent) {
   const speed = document.getElementById('voice-speed');
 
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({
+    const request = {
       type: 'TTS_REQUEST',
       text,
       token,
       serverUrl,
       callType: cloned ? 'cloned' : 'stock',
-      voiceId: cloned ? 'cloned' : 'Kore',
       speed: speed ? speed.value : 'normal',
-    }, (response) => {
+    };
+
+    if (!cloned) {
+      request.voiceId = 'Kore';
+    }
+
+    chrome.runtime.sendMessage(request, (response) => {
       const err = chrome.runtime.lastError;
       if (err) {
         if (statusEl) statusEl.textContent = 'Extension error: ' + err.message;
