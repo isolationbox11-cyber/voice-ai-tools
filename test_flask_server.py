@@ -420,7 +420,7 @@ class TestTtsEndpoint:
             assert resp.get_json()["error"] == "Speech synthesis failed"
 
     def test_cloned_sentinel_voice_id_does_not_override_resolved_voice(self, monkeypatch):
-        captured = {}
+        captured = []
 
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
@@ -430,7 +430,7 @@ class TestTtsEndpoint:
         monkeypatch.setitem(sys.modules, "custom_voice_config", custom_mod)
 
         def recording_stub(text, voice_settings, **kwargs):
-            captured["voice_id"] = voice_settings.get("voice_id")
+            captured.append(voice_settings.get("voice_id"))
             return b"FAKE_AUDIO", "audio/wav", None, text
 
         tts_mod = sys.modules["tts_engine"]
@@ -447,7 +447,7 @@ class TestTtsEndpoint:
             resp_mixed_case = c.post("/tts", json={"text": "hello", "call_type": "cloned", "voice_id": "ClOnEd"})
             assert resp_mixed_case.status_code == 200
 
-        assert captured["voice_id"] == "local_voice_123"
+        assert captured == ["local_voice_123", "local_voice_123"]
 
     # ── Boundary / regression ────────────────────────────────────────────────
 
