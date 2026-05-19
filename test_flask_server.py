@@ -236,6 +236,57 @@ class TestHealthEndpoint:
 
 
 # ===========================================================================
+# /presets
+# ===========================================================================
+
+class TestPresetsEndpoint:
+    def test_post_then_get_round_trip(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.PRESET_PATH = tmp_path / "voice_presets.json"
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/presets", json={"name": "Default", "voice_id": "kore"})
+            assert resp.status_code == 200
+            assert resp.get_json() == {"ok": True}
+
+            get_resp = c.get("/presets")
+            assert get_resp.status_code == 200
+            assert get_resp.get_json() == {"presets": [{"name": "Default", "voice_id": "kore"}]}
+
+    def test_post_uses_preset_write_lock(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.PRESET_PATH = tmp_path / "voice_presets.json"
+        srv.app.config["TESTING"] = True
+
+        class _TrackingLock:
+            def __init__(self):
+                self.enter_count = 0
+                self.exit_count = 0
+
+            def __enter__(self):
+                self.enter_count += 1
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.exit_count += 1
+                return False
+
+        tracking_lock = _TrackingLock()
+        srv.PRESET_WRITE_LOCK = tracking_lock
+
+        with srv.app.test_client() as c:
+            resp = c.post("/presets", json={"name": "Locked"})
+            assert resp.status_code == 200
+
+        assert tracking_lock.enter_count == 1
+        assert tracking_lock.exit_count == 1
+
+
+# ===========================================================================
 # POST /tts
 # ===========================================================================
 

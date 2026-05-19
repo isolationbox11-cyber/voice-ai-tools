@@ -13,7 +13,7 @@ Env vars:
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-import os, io, re, json, time, wave, tempfile, importlib, sys
+import os, io, re, json, time, wave, tempfile, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -58,6 +58,7 @@ PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
 SAMPLES_DIR        = Path("voice_samples")
+PRESET_WRITE_LOCK  = threading.Lock()
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
@@ -263,17 +264,18 @@ def presets():
     data = request.get_json(silent=True)
     if not data or not data.get("name"):
         return jsonify({"error": "Preset needs a name"}), 400
-    presets_list = []
-    if PRESET_PATH.exists():
-        with open(PRESET_PATH) as f:
-            presets_list = json.load(f).get("presets", [])
-    existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
-    if existing is not None:
-        presets_list[existing] = data
-    else:
-        presets_list.append(data)
-    with open(PRESET_PATH, "w") as f:
-        json.dump({"presets": presets_list}, f, indent=2)
+    with PRESET_WRITE_LOCK:
+        presets_list = []
+        if PRESET_PATH.exists():
+            with open(PRESET_PATH) as f:
+                presets_list = json.load(f).get("presets", [])
+        existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
+        if existing is not None:
+            presets_list[existing] = data
+        else:
+            presets_list.append(data)
+        with open(PRESET_PATH, "w") as f:
+            json.dump({"presets": presets_list}, f, indent=2)
     return jsonify({"ok": True})
 
 # ── /log ──────────────────────────────────────────────────────────────
