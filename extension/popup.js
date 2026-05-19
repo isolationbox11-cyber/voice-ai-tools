@@ -162,6 +162,11 @@ function initVoice() {
   });
 }
 
+/**
+ * Route TTS through background.js -> offscreen.js so playback
+ * survives popup closure. Previously this called fetch() + new Audio()
+ * directly in the popup, which killed audio the moment the popup closed.
+ */
 async function speakText(cloned, silent) {
   const txt = document.getElementById('tts-text');
   const statusEl = document.getElementById('voice-status');
@@ -171,31 +176,44 @@ async function speakText(cloned, silent) {
   if (!silent && speakBtn) speakBtn.disabled = true;
   if (statusEl && !silent) statusEl.textContent = 'Speaking...';
   const speed = document.getElementById('voice-speed');
-  try {
-    const r = await fetch(serverUrl + '/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token },
-      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'Kore', speed: speed ? speed.value : 'normal' })
-    });
-    if (!r.ok) {
-      const e = await r.json();
-      if (statusEl) statusEl.textContent = 'Error: ' + (e.error || r.status);
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: 'TTS_REQUEST',
+      text,
+      token,
+      serverUrl,
+      callType: cloned ? 'cloned' : 'stock',
+      voiceId: cloned ? 'cloned' : 'Kore',
+      speed: speed ? speed.value : 'normal',
+    }, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        if (statusEl) statusEl.textContent = 'Extension error: ' + err.message;
+        addLog('warn', 'TTS extension error: ' + err.message);
+      } else if (response && !response.ok) {
+        if (statusEl) statusEl.textContent = 'Error: ' + (response.error || 'unknown');
+        addLog('warn', 'TTS error: ' + (response.error || 'unknown'));
+      } else {
+        addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
+        if (statusEl && !silent) statusEl.textContent = 'Playing...';
+      }
       if (!silent && speakBtn) speakBtn.disabled = false;
-      return;
-    }
-    const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); if (!silent && statusEl) statusEl.textContent = 'Done'; };
-    audio.onerror = () => { URL.revokeObjectURL(url); if (statusEl) statusEl.textContent = 'Playback error'; };
-    await audio.play();
-    addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
-  } catch (e) {
-    if (statusEl) statusEl.textContent = 'Error -- is Flask running on port 5001?';
-    addLog('warn', 'Voice error: ' + e.message);
-  }
-  if (!silent && speakBtn) speakBtn.disabled = false;
+      resolve();
+    });
+  });
 }
+
+// Listen for playback complete/error events forwarded from offscreen
+chrome.runtime.onMessage.addListener((message) => {
+  const statusEl = document.getElementById('voice-status');
+  if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {
+    if (statusEl) statusEl.textContent = 'Done';
+  } else if (message.type === 'AUDIO_PLAYBACK_ERROR') {
+    if (statusEl) statusEl.textContent = 'Playback error: ' + (message.error || 'unknown');
+    addLog('warn', 'Playback error: ' + (message.error || 'unknown'));
+  }
+});
 
 // -- train tab (karaoke)
 function initTrain() {

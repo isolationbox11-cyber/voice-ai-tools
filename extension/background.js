@@ -1,5 +1,6 @@
 /* background.js – Manifest V3 service worker */
 
+const DEFAULT_SERVER = 'http://127.0.0.1:5001';
 const OFFSCREEN_URL = chrome.runtime.getURL("offscreen.html");
 
 async function ensureOffscreenDocument() {
@@ -16,8 +17,10 @@ async function ensureOffscreenDocument() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "TTS_REQUEST") {
     // Fetch audio in the background so playback survives popup closure.
-    const { text, token, serverUrl, callType, speed } = message;
-    const url = (serverUrl || "http://127.0.0.1:5000") + "/tts";
+    const { text, token, serverUrl, callType, speed, voiceId } = message;
+    // Use the serverUrl provided by the popup (which reads chrome.storage),
+    // falling back to the shared DEFAULT_SERVER constant.
+    const url = (serverUrl || DEFAULT_SERVER) + "/tts";
 
     ensureOffscreenDocument()
       .then(() =>
@@ -27,7 +30,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             "Content-Type": "application/json",
             "X-Voice-Token": token || "",
           },
-          body: JSON.stringify({ text, call_type: callType, speed: speed || "normal" }),
+          body: JSON.stringify({
+            text,
+            voice_id: voiceId || (callType === 'cloned' ? 'cloned' : 'Kore'),
+            call_type: callType,
+            speed: speed || "normal",
+          }),
         })
       )
       .then((resp) => {
@@ -36,11 +44,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             throw new Error(j.error || `HTTP ${resp.status}`);
           });
         }
-        // Capture Content-Type before consuming body so offscreen can build
-        // the Blob with the correct MIME type (Gemini may return audio/mp3,
-        // audio/ogg, etc. rather than always audio/wav).
-        // Strip any parameters (e.g. "; charset=utf-8") – Blob only wants the
-        // base type.
+        // Strip any parameters (e.g. "; charset=utf-8") – Blob only wants the base type.
         const rawType = resp.headers.get("Content-Type") || "audio/wav";
         const mimeType = rawType.split(";")[0].trim() || "audio/wav";
         return resp.arrayBuffer().then((buf) => ({ buf, mimeType }));
