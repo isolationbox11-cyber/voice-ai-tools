@@ -22,7 +22,7 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-MAX_TEXT_LENGTH = 1000
+MAX_TEXT_LENGTH = 2000
 _TTS_MODEL = "gemini-2.5-flash-preview-tts"
 _genai_client = None
 
