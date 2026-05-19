@@ -591,7 +591,6 @@ class TestTtsEndpoint:
             assert resp_new.status_code == 200
 
 
-<<<<<<< HEAD
 class TestLogEndpoint:
     def test_post_valid_entry_is_stored(self, monkeypatch, tmp_path):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
