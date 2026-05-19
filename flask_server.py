@@ -65,9 +65,9 @@ MODEL_DIR.mkdir(exist_ok=True)
 # To use your cloned voice, set CUSTOM_VOICE_ID in custom_voice_config.py.
 _GEMINI_DEFAULT_VOICE = "Kore"
 
-_FLASK_ENV = os.environ.get("FLASK_ENV", "").strip().lower()
+flask_env = os.environ.get("FLASK_ENV", "").strip().lower()
 if not VOICE_SERVER_TOKEN:
-    if _FLASK_ENV == "production":
+    if flask_env == "production":
         raise RuntimeError("VOICE_SERVER_TOKEN must be set when FLASK_ENV=production")
     print(
         "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
