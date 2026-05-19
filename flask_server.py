@@ -61,7 +61,6 @@ PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
 SAMPLES_DIR        = Path("voice_samples")
-<<<<<<< HEAD
 PRESET_WRITE_LOCK  = threading.Lock()
 SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
 SERVER_START_TIME  = time.time()
