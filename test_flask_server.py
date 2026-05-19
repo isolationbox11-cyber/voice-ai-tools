@@ -441,6 +441,7 @@ class TestTtsEndpoint:
         srv.app.config["TESTING"] = True
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 502
             assert resp.get_json()["error"] == "Request timed out"
 
     def test_cloned_sentinel_voice_id_does_not_override_resolved_voice(self, monkeypatch):
