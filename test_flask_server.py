@@ -405,7 +405,7 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
             assert resp.status_code == 502
-            assert "error" in resp.get_json()
+            assert resp.get_json()["error"] == "API key not configured"
 
     def test_tts_engine_error_message_sanitized(self, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
@@ -418,6 +418,30 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
             assert resp.get_json()["error"] == "Speech synthesis failed"
+
+    def test_tts_engine_error_message_voice_model_unavailable(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="Voice model unavailable")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.get_json()["error"] == "Voice model unavailable"
+
+    def test_tts_engine_error_message_timeout(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="Request timed out after 30s")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.get_json()["error"] == "Request timed out"
 
     def test_cloned_sentinel_voice_id_does_not_override_resolved_voice(self, monkeypatch):
         captured = []
