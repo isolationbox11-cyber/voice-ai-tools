@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Voice AI Tools - Flask Backend
-Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status
+Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status /api/lookup
 
 Env vars:
   GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
@@ -52,6 +52,13 @@ try:
 except ImportError:
     _default_voice_fn = None
 
+try:
+    import lookup_engine as _lookup_engine
+    _LOOKUP_OK = True
+except ImportError:
+    _lookup_engine = None
+    _LOOKUP_OK = False
+
 # ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
@@ -66,9 +73,6 @@ SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
-# Default Gemini PrebuiltVoiceConfig name used when no custom voice is configured.
-# Must be a valid Gemini prebuilt voice (e.g. Kore, Puck, Charon, Aoede, Fenrir).
-# To use your cloned voice, set CUSTOM_VOICE_ID in custom_voice_config.py.
 _GEMINI_DEFAULT_VOICE = "Kore"
 
 flask_env = os.environ.get("FLASK_ENV", "").strip().lower()
@@ -101,31 +105,18 @@ def _safe_public_error_message(raw_error) -> str:
     if any(
         token in msg
         for token in (
-            "api key missing",
-            "missing api key",
-            "api key not configured",
-            "apikey missing",
-            "apikey not configured",
-            "invalid api key",
-            "api key invalid",
-            "unauthorized",
-            "authentication failed",
+            "api key missing", "missing api key", "api key not configured",
+            "apikey missing", "apikey not configured", "invalid api key",
+            "api key invalid", "unauthorized", "authentication failed",
         )
     ):
         return "API key not configured"
     if any(
         token in msg
         for token in (
-            "voice model unavailable",
-            "voice model not found",
-            "voice not found",
-            "model not found",
-            "voice unavailable",
-            "model unavailable",
-            "unsupported voice",
-            "unsupported model",
-            "invalid voice",
-            "invalid model",
+            "voice model unavailable", "voice model not found", "voice not found",
+            "model not found", "voice unavailable", "model unavailable",
+            "unsupported voice", "unsupported model", "invalid voice", "invalid model",
         )
     ):
         return "Voice model unavailable"
@@ -137,33 +128,24 @@ def _safe_public_error_message(raw_error) -> str:
 def _validate_log_entry(data):
     if not isinstance(data, dict):
         return None, "Invalid JSON body"
-
     allowed_keys = {"action", "timestamp", "text"}
     unknown_keys = set(data.keys()) - allowed_keys
     if unknown_keys:
         return None, f"Unknown fields: {', '.join(sorted(unknown_keys))}"
-
-    action = data.get("action")
-    text = data.get("text")
+    action    = data.get("action")
+    text      = data.get("text")
     timestamp = data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
-
     if not isinstance(action, str) or not action.strip():
         return None, "action is required"
     if not isinstance(text, str) or not text.strip():
         return None, "text is required"
     if not isinstance(timestamp, str) or not timestamp.strip():
         return None, "timestamp must be a non-empty string"
-
-    entry = {
-        "action": action.strip(),
-        "timestamp": timestamp.strip(),
-        "text": text.strip(),
-    }
-
+    entry = {"action": action.strip(), "timestamp": timestamp.strip(), "text": text.strip()}
     if len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) > MAX_LOG_ENTRY_SIZE:
         return None, f"log entry exceeds maximum size of {MAX_LOG_ENTRY_SIZE} bytes"
-
     return entry, None
+
 
 # ── auth ──────────────────────────────────────────────────────────────
 def _check_token() -> bool:
@@ -171,17 +153,9 @@ def _check_token() -> bool:
         return True
     return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
 
+
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(call_type: str) -> dict:
-    """
-    Resolution order:
-      1. custom_voice_config.get_custom_voice_settings(call_type)  — your cloned voice
-      2. voice_config.get_voice_for_context(call_type)             — repo defaults
-      3. Hard fallback: Kore (valid Gemini PrebuiltVoiceConfig name)
-
-    'en-US-Studio-O' is a Google Cloud TTS v1 voice and is NOT compatible
-    with the Gemini TTS API used by tts_engine.synthesize_speech.
-    """
     try:
         custom = importlib.import_module("custom_voice_config")
         fn = getattr(custom, "get_custom_voice_settings", None)
@@ -190,12 +164,10 @@ def _resolve_voice_settings(call_type: str) -> dict:
             if isinstance(result, dict):
                 resolved = dict(result)
                 if not resolved.get("voice_id"):
-                    # Fall back to CUSTOM_VOICE_ID attr, then Kore — never en-US-Studio-O
                     resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
                 return resolved
     except Exception:
         pass
-
     try:
         if callable(_default_voice_fn):
             result = _default_voice_fn(call_type or "LEGITIMATE")
@@ -206,13 +178,14 @@ def _resolve_voice_settings(call_type: str) -> dict:
                 return resolved
     except Exception:
         pass
-
     return {"voice_id": _GEMINI_DEFAULT_VOICE}
+
 
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
     return jsonify({"status": "ok"})
+
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
@@ -253,6 +226,7 @@ def tts():
         print(f"TTS request failed: {e}", file=sys.stderr)
         return jsonify({"error": "Failed to synthesize speech"}), 500
 
+
 # ── /presets ──────────────────────────────────────────────────────────
 @app.route("/presets", methods=["GET", "POST"])
 @limiter.limit("60 per minute")
@@ -281,6 +255,7 @@ def presets():
         with open(PRESET_PATH, "w") as f:
             json.dump({"presets": presets_list}, f, indent=2)
     return jsonify({"ok": True})
+
 
 # ── /log ──────────────────────────────────────────────────────────────
 @app.route("/log", methods=["GET", "POST"])
@@ -321,10 +296,12 @@ def clear_log_endpoint():
         json.dump({"entries": []}, f, indent=2)
     return jsonify({"ok": True})
 
+
 def _filter_shodan_response(payload):
     if not isinstance(payload, dict):
         return {}
     return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
+
 
 # ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
@@ -343,11 +320,12 @@ def shodan():
         r = _requests.get(
             f"https://api.shodan.io/shodan/host/{ip}",
             params={"key": SHODAN_API_KEY},
-            timeout=10
+            timeout=10,
         )
         return jsonify(_filter_shodan_response(r.json()))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ── /analyze_pdf ──────────────────────────────────────────────────────
 @app.route("/analyze_pdf", methods=["POST"])
@@ -360,7 +338,7 @@ def analyze_pdf():
     f = request.files["file"]
     raw = f.read()
     result = {"metadata": {}, "links": [], "ips": [], "suspicious": False, "pages": 0}
-    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    ip_pattern  = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
     url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
     suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
 
@@ -378,8 +356,8 @@ def analyze_pdf():
                         uri = href.get("uri", "")
                         if uri:
                             result["links"].append(uri)
-                result["ips"] = list(set(ip_pattern.findall(full_text)))
-                extra_links = url_pattern.findall(full_text)
+                result["ips"]   = list(set(ip_pattern.findall(full_text)))
+                extra_links     = url_pattern.findall(full_text)
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
                 result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
@@ -396,8 +374,8 @@ def analyze_pdf():
             full_text = ""
             for page in reader.pages:
                 full_text += (page.extract_text() or "")
-            result["ips"] = list(set(ip_pattern.findall(full_text)))
-            result["links"] = list(set(url_pattern.findall(full_text)))
+            result["ips"]        = list(set(ip_pattern.findall(full_text)))
+            result["links"]      = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
             return jsonify(result)
@@ -405,12 +383,13 @@ def analyze_pdf():
             return jsonify({"error": str(e)}), 500
 
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
-    raw_str = raw.decode("latin-1", errors="ignore")
-    result["ips"] = list(set(ip_pattern.findall(raw_str)))
-    result["links"] = list(set(url_pattern.findall(raw_str)))
+    raw_str   = raw.decode("latin-1", errors="ignore")
+    result["ips"]        = list(set(ip_pattern.findall(raw_str)))
+    result["links"]      = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-    result["metadata"] = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
+    result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
     return jsonify(result)
+
 
 # ── /train ────────────────────────────────────────────────────────────
 @app.route("/train", methods=["POST"])
@@ -424,16 +403,16 @@ def train():
     saved = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r'[^\w.\-]', '_', fname)
-        safe = Path(safe).name
-        dest = SAMPLES_DIR / safe
+        safe  = re.sub(r'[^\w.\-]', '_', fname)
+        safe  = Path(safe).name
+        dest  = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
     manifest = {
-        "samples": saved,
+        "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
         "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count": len(saved)
+        "count":      len(saved),
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
@@ -457,12 +436,14 @@ def train():
         json.dump(manifest, mf, indent=2)
     return jsonify({"ok": True, "saved": saved, **manifest})
 
+
 # ── /model_status ─────────────────────────────────────────────────────
 @app.route("/model_status")
 def model_status():
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
     return jsonify(_model_status())
+
 
 def _model_status():
     manifest_path = MODEL_DIR / "manifest.json"
@@ -471,21 +452,74 @@ def _model_status():
             with open(manifest_path) as f:
                 m = json.load(f)
             return {
-                "trained": True,
-                "count": m.get("count", 0),
+                "trained":    True,
+                "count":      m.get("count", 0),
                 "trained_at": m.get("trained_at", "unknown"),
-                "status": m.get("status", "unknown"),
-                "voice_id": m.get("voice_id"),
-                "error": m.get("error"),
-                "note": m.get("note")
+                "status":     m.get("status", "unknown"),
+                "voice_id":   m.get("voice_id"),
+                "error":      m.get("error"),
+                "note":       m.get("note"),
             }
         except Exception:
             pass
     return {"trained": False}
 
+
+# ── /api/lookup ───────────────────────────────────────────────────────
+@app.route("/api/lookup", methods=["POST"])
+@limiter.limit("20 per minute")
+def api_lookup():
+    """
+    Real-data intelligence lookup for domains, IPs, and phone numbers.
+
+    Request body (JSON):
+        { "query": "<domain | IPv4 | phone number>" }
+
+    Response (JSON):
+        {
+          "query":     "<original input>",
+          "type":      "domain" | "ip" | "phone" | "unknown",
+          "timestamp": "<ISO-8601 UTC>",
+          ...type-specific fields
+        }
+
+    Auth:       X-Voice-Token header (when VOICE_SERVER_TOKEN is set)
+    Rate-limit: 20 requests / minute per IP
+    """
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if not _LOOKUP_OK:
+        return jsonify({"error": "lookup_engine not available — ensure lookup_engine.py is present"}), 503
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "Invalid JSON body"}), 400
+
+    query = (data.get("query") or "").strip()
+    if not query:
+        return jsonify({"error": "query is required"}), 400
+    if len(query) > 253:
+        return jsonify({"error": "query too long"}), 400
+
+    # Block private/loopback ranges to prevent SSRF-style abuse
+    _private = re.compile(
+        r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)'
+    )
+    if _private.match(query):
+        return jsonify({"error": "Private or loopback addresses are not supported"}), 400
+
+    try:
+        result = _lookup_engine.lookup(query)
+        return jsonify(result)
+    except Exception as exc:
+        print(f"Lookup failed for {query!r}: {exc}", file=sys.stderr)
+        return jsonify({"error": "Lookup failed"}), 500
+
+
 # ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    _loopback = {"127.0.0.1", "::1", "localhost"}
+    _loopback      = {"127.0.0.1", "::1", "localhost"}
     _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
     _requested_host = os.environ.get("HOST", "127.0.0.1").strip()
 
