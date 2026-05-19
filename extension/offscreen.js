@@ -68,7 +68,7 @@ chrome.runtime.onMessage.addListener((message) => {
     audio.onerror = () => {
       const mediaErr = audio.error; // local ref – never null here
       const code = mediaErr ? mediaErr.code : -1;
-      const msg  = mediaErr ? mediaErr.message : 'Unknown MediaError';
+      const msg = mediaErr ? mediaErr.message : 'Unknown MediaError';
       const label = MEDIA_ERR_LABELS[code] || 'UNKNOWN_ERR';
       const readable = `${label} (code ${code})${msg ? ': ' + msg : ''}`;
       console.error('[offscreen] MediaError:', readable, '| mime:', mimeType, '| bytes:', uint8Array.length);
@@ -89,7 +89,6 @@ chrome.runtime.onMessage.addListener((message) => {
         error: `${err.name}: ${err.message}`,
       });
     });
-
   } catch (e) {
     console.error('[offscreen] blob creation failed:', e);
     _cleanup();
