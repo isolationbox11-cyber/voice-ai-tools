@@ -637,7 +637,6 @@ class TestLogEndpoint:
             assert log_resp.status_code == 200
             assert log_resp.get_json() == {"entries": []}
 
-
 class TestTrainEndpoint:
     @staticmethod
     def _wav_header_bytes():
