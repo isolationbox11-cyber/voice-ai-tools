@@ -164,8 +164,15 @@ function initVoice() {
 
 /**
  * Route TTS through background.js -> offscreen.js so playback
- * survives popup closure. Previously this called fetch() + new Audio()
- * directly in the popup, which killed audio the moment the popup closed.
+ * survives popup closure.
+ *
+ * UI state ownership:
+ *   'Sending...'  — set here while the fetch is in-flight
+ *   ''            — cleared here on fetch ACK (ok:true); offscreen events take over
+ *   'Error: ...'  — set here on fetch failure (ok:false or lastError)
+ *   'Playing...'  — set by AUDIO_PLAYBACK_COMPLETE listener below (audio started)
+ *   'Done'        — set by AUDIO_PLAYBACK_COMPLETE listener below
+ *   'Playback error: ...' — set by AUDIO_PLAYBACK_ERROR listener below
  */
 async function speakText(cloned, silent) {
   const txt = document.getElementById('tts-text');
@@ -174,34 +181,35 @@ async function speakText(cloned, silent) {
   const text = txt ? txt.value.trim() : '';
   if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
   if (!silent && speakBtn) speakBtn.disabled = true;
-  if (statusEl && !silent) statusEl.textContent = 'Speaking...';
+  // 'Sending...' while the network request is in-flight.
+  // Never 'Playing...' here — that comes from AUDIO_PLAYBACK_COMPLETE.
+  if (statusEl && !silent) statusEl.textContent = 'Sending...';
   const speed = document.getElementById('voice-speed');
 
   return new Promise((resolve) => {
-    const request = {
+    chrome.runtime.sendMessage({
       type: 'TTS_REQUEST',
       text,
       token,
       serverUrl,
       callType: cloned ? 'cloned' : 'stock',
+      voiceId: cloned ? 'cloned' : 'Kore',
       speed: speed ? speed.value : 'normal',
-    };
-
-    if (!cloned) {
-      request.voiceId = 'Kore';
-    }
-
-    chrome.runtime.sendMessage(request, (response) => {
+    }, (response) => {
       const err = chrome.runtime.lastError;
       if (err) {
-        if (statusEl) statusEl.textContent = 'Extension error: ' + err.message;
+        // Extension messaging error (e.g. service worker not running)
+        if (statusEl && !silent) statusEl.textContent = 'Extension error: ' + err.message;
         addLog('warn', 'TTS extension error: ' + err.message);
       } else if (response && !response.ok) {
-        if (statusEl) statusEl.textContent = 'Error: ' + (response.error || 'unknown');
+        // Fetch or HTTP error from background.js — playback will never start
+        if (statusEl && !silent) statusEl.textContent = 'Error: ' + (response.error || 'unknown');
         addLog('warn', 'TTS error: ' + (response.error || 'unknown'));
       } else {
+        // Fetch succeeded; audio bytes are on their way to offscreen.
+        // Clear the in-flight status — AUDIO_PLAYBACK_COMPLETE will set 'Playing...'
+        if (statusEl && !silent) statusEl.textContent = '';
         addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
-        if (statusEl && !silent) statusEl.textContent = 'Playing...';
       }
       if (!silent && speakBtn) speakBtn.disabled = false;
       resolve();
@@ -209,7 +217,8 @@ async function speakText(cloned, silent) {
   });
 }
 
-// Listen for playback complete/error events forwarded from offscreen
+// Offscreen events own the final playback UI state.
+// These fire whether or not the popup is the one that initiated the request.
 chrome.runtime.onMessage.addListener((message) => {
   const statusEl = document.getElementById('voice-status');
   if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {

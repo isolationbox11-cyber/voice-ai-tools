@@ -16,9 +16,8 @@ async function ensureOffscreenDocument() {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "TTS_REQUEST") {
-    // Fetch audio in the background so playback survives popup closure.
     const { text, token, serverUrl, callType, speed, voiceId } = message;
-    // Use the serverUrl provided by the popup (which reads chrome.storage),
+    // Use the serverUrl provided by the popup (reads chrome.storage),
     // falling back to the shared DEFAULT_SERVER constant.
     const url = (serverUrl || DEFAULT_SERVER) + "/tts";
 
@@ -57,12 +56,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           audioData,
           mimeType,
         });
+        // ACK to popup: fetch succeeded and bytes are en route to offscreen.
+        // This does NOT mean playback has started — the popup's
+        // AUDIO_PLAYBACK_COMPLETE / AUDIO_PLAYBACK_ERROR listeners own
+        // the final UI state.
         sendResponse({ ok: true });
       })
       .catch((err) => {
+        // Fetch or HTTP error — playback will never start.
         sendResponse({ ok: false, error: err.message });
       });
 
-    return true; // keep channel open for async sendResponse
+    return true; // keep message channel open for async sendResponse
   }
 });
