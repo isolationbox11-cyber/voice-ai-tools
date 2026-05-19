@@ -141,7 +141,7 @@ def _resolve_voice_settings(call_type: str) -> dict:
 def health():
     return jsonify({
         "status": "ok",
-        "tts_engine": globals().get("synthesize_speech") is not None,
+        "tts_engine": synthesize_speech is not None,
         "api_key_configured": bool(os.environ.get("GOOGLE_API_KEY", "").strip()),
         "auth_enabled": bool(VOICE_SERVER_TOKEN),
         "uptime_seconds": int(time.time() - SERVER_START_TIME),
