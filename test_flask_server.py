@@ -524,3 +524,63 @@ class TestTtsEndpoint:
             resp_new = c.post("/tts", json={"text": "hi"},
                               headers={"X-Voice-Token": "token99"})
             assert resp_new.status_code == 200
+
+
+class TestLogEndpoint:
+    def test_post_valid_entry_is_stored(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.LOG_PATH = tmp_path / "session_log.json"
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post("/log", json={"action": "info", "text": "hello", "timestamp": "2026-01-01T00:00:00Z"})
+            assert resp.status_code == 200
+            log_resp = c.get("/log")
+            assert log_resp.status_code == 200
+            assert log_resp.get_json()["entries"][0] == {
+                "action": "info",
+                "text": "hello",
+                "timestamp": "2026-01-01T00:00:00Z",
+            }
+
+    def test_post_rejects_unknown_fields(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.LOG_PATH = tmp_path / "session_log.json"
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post("/log", json={"action": "info", "text": "hello", "extra": "nope"})
+            assert resp.status_code == 400
+            assert "Unknown fields" in resp.get_json()["error"]
+
+    def test_post_rejects_oversized_entries(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.LOG_PATH = tmp_path / "session_log.json"
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post("/log", json={"action": "info", "text": "a" * 3000, "timestamp": "2026-01-01T00:00:00Z"})
+            assert resp.status_code == 400
+            assert "maximum size" in resp.get_json()["error"]
+
+    def test_clear_endpoint_clears_entries(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.LOG_PATH = tmp_path / "session_log.json"
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            post_resp = c.post("/log", json={"action": "info", "text": "hello"})
+            assert post_resp.status_code == 200
+            clear_resp = c.post("/log/clear")
+            assert clear_resp.status_code == 200
+            log_resp = c.get("/log")
+            assert log_resp.status_code == 200
+            assert log_resp.get_json() == {"entries": []}
