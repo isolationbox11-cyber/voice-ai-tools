@@ -1,24 +1,23 @@
 /* offscreen.js – runs in the hidden offscreen document for audio playback */
 
-let _currentAudio = null;
-let _currentBlobUrl = null;
+let currentAudio = null;
+let currentBlobUrl = null;
 
 function _cleanup() {
-  if (_currentAudio) {
-    // Detach handlers BEFORE nulling so no stale callbacks fire
-    _currentAudio.onended = null;
-    _currentAudio.onerror = null;
-    _currentAudio.pause();
-    _currentAudio.src = '';
-    _currentAudio = null;
+  if (currentAudio) {
+    currentAudio.onended = null;
+    currentAudio.onerror = null;
+    currentAudio.pause();
+    currentAudio.src = '';
+    currentAudio = null;
   }
-  if (_currentBlobUrl) {
-    URL.revokeObjectURL(_currentBlobUrl);
-    _currentBlobUrl = null;
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
   }
 }
 
-const MEDIA_ERR = {
+const MEDIA_ERR_LABELS = {
   1: 'MEDIA_ERR_ABORTED',
   2: 'MEDIA_ERR_NETWORK',
   3: 'MEDIA_ERR_DECODE',
@@ -30,14 +29,18 @@ chrome.runtime.onMessage.addListener((message) => {
 
   _cleanup();
 
+  // Default to audio/mpeg – most TTS APIs (ElevenLabs etc.) return MP3.
+  // Change to audio/wav only if your backend explicitly sends WAV.
   const mimeType = message.mimeType || 'audio/mpeg';
   console.log('[offscreen] audioData bytes:', message.audioData.byteLength, 'mime:', mimeType);
 
-  // ── MIME support pre-check ────────────────────────────────────────────────
+  // ── MIME support pre-check ─────────────────────────────────────────
   const probe = document.createElement('audio');
   const support = probe.canPlayType(mimeType);
   if (!support || support === '') {
-    const errMsg = `Browser cannot play '${mimeType}' (canPlayType='${support}')`;
+    const errMsg =
+      `Browser cannot play '${mimeType}' (canPlayType='${support}'). ` +
+      'Supported: audio/mpeg, audio/wav, audio/ogg, audio/webm, audio/mp4';
     console.error('[offscreen]', errMsg);
     chrome.runtime.sendMessage({ type: 'AUDIO_PLAYBACK_ERROR', error: errMsg });
     return;
@@ -45,33 +48,38 @@ chrome.runtime.onMessage.addListener((message) => {
   console.log(`[offscreen] canPlayType('${mimeType}') →`, support);
 
   try {
-    const uint8 = new Uint8Array(message.audioData);
-    const blob = new Blob([uint8], { type: mimeType });
+    const uint8Array = new Uint8Array(message.audioData);
+    const blob = new Blob([uint8Array], { type: mimeType });
     const blobUrl = URL.createObjectURL(blob);
-    _currentBlobUrl = blobUrl;
-    console.log('[offscreen] blob URL created, size:', uint8.length);
+    currentBlobUrl = blobUrl;
+    console.log('[offscreen] blob URL created, size:', uint8Array.length);
 
     const audio = new Audio();
-    _currentAudio = audio;
+    currentAudio = audio;
 
     audio.onended = () => {
       _cleanup();
       chrome.runtime.sendMessage({ type: 'AUDIO_PLAYBACK_COMPLETE' });
     };
 
-    // ── FIX: capture error BEFORE _cleanup() nulls the audio ref ─────────
+    // FIX: capture audio.error into a local var BEFORE calling _cleanup(),
+    // which nulls currentAudio – otherwise we hit
+    // "Cannot read properties of null (reading 'error')".
     audio.onerror = () => {
-      const me = audio.error;                          // local ref, never null here
-      const code = me ? me.code : -1;
-      const label = MEDIA_ERR[code] || 'UNKNOWN_ERR';
-      const readable = `${label} (code ${code})${me && me.message ? ': ' + me.message : ''}`;
-      console.error('[offscreen] MediaError:', readable, '| mime:', mimeType, '| bytes:', uint8.length);
+      const mediaErr = audio.error; // local ref – never null here
+      const code = mediaErr ? mediaErr.code : -1;
+      const msg = mediaErr ? mediaErr.message : 'Unknown MediaError';
+      const label = MEDIA_ERR_LABELS[code] || 'UNKNOWN_ERR';
+      const readable = `${label} (code ${code})${msg ? ': ' + msg : ''}`;
+      console.error('[offscreen] MediaError:', readable, '| mime:', mimeType, '| bytes:', uint8Array.length);
       _cleanup();
       chrome.runtime.sendMessage({ type: 'AUDIO_PLAYBACK_ERROR', error: readable });
     };
 
-    audio.src = blobUrl;   // set src AFTER attaching handlers
-    audio.load();          // force decode attempt so onerror fires reliably
+    // Set src AFTER handlers are attached; explicit load() before play()
+    // so onerror fires reliably on unsupported/corrupt sources.
+    audio.src = blobUrl;
+    audio.load();
 
     audio.play().catch((err) => {
       console.error('[offscreen] play() rejected:', err.name, err.message);
@@ -81,7 +89,6 @@ chrome.runtime.onMessage.addListener((message) => {
         error: `${err.name}: ${err.message}`,
       });
     });
-
   } catch (e) {
     console.error('[offscreen] blob creation failed:', e);
     _cleanup();
