@@ -211,9 +211,12 @@ class TestHealthEndpoint:
         response = client_no_token.get("/health")
         data = response.get_json()
         assert data["status"] == "ok"
-        assert data["tts_engine"] is True
-        assert data["api_key_configured"] is False
-        assert data["auth_enabled"] is False
+        assert isinstance(data["tts_engine"], bool)
+        assert isinstance(data["api_key_configured"], bool)
+        assert isinstance(data["auth_enabled"], bool)
+        assert data["tts_engine"]
+        assert not data["api_key_configured"]
+        assert not data["auth_enabled"]
         assert isinstance(data["uptime_seconds"], int)
         assert data["uptime_seconds"] >= 0
 
