@@ -417,7 +417,7 @@ class TestTtsEndpoint:
         srv.app.config["TESTING"] = True
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
-            assert resp.get_json()["error"] == "Quota exceeded"
+            assert resp.get_json()["error"] == "Speech synthesis failed"
 
     # ── Boundary / regression ────────────────────────────────────────────────
 
