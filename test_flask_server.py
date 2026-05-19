@@ -635,3 +635,67 @@ class TestLogEndpoint:
             log_resp = c.get("/log")
             assert log_resp.status_code == 200
             assert log_resp.get_json() == {"entries": []}
+
+
+# ===========================================================================
+# /shodan
+# ===========================================================================
+
+class TestShodanEndpoint:
+    def test_returns_only_allowlisted_fields(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        class _Resp:
+            def json(self):
+                return {
+                    "ip_str": "1.2.3.4",
+                    "ports": [80, 443],
+                    "org": "Example Org",
+                    "country_name": "United States",
+                    "vulns": {"CVE-2024-0001": {}},
+                    "data": [{"port": 80, "banner": "Apache/2.4.1"}],
+                }
+
+        class _Requests:
+            @staticmethod
+            def get(*args, **kwargs):
+                return _Resp()
+
+        srv._requests = _Requests()
+        srv.SHODAN_API_KEY = "dummy"
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.get("/shodan?ip=1.2.3.4")
+            assert resp.status_code == 200
+            assert resp.get_json() == {
+                "ip_str": "1.2.3.4",
+                "ports": [80, 443],
+                "org": "Example Org",
+                "country_name": "United States",
+            }
+
+    def test_non_object_shodan_payload_returns_empty_object(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        class _Resp:
+            def json(self):
+                return ["unexpected", "payload"]
+
+        class _Requests:
+            @staticmethod
+            def get(*args, **kwargs):
+                return _Resp()
+
+        srv._requests = _Requests()
+        srv.SHODAN_API_KEY = "dummy"
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.get("/shodan?ip=1.2.3.4")
+            assert resp.status_code == 200
+            assert resp.get_json() == {}
