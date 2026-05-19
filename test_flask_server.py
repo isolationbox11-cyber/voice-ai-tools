@@ -8,6 +8,7 @@ Tests for flask_server.py – covers changes introduced in this PR:
 """
 
 import importlib
+import io
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -480,3 +481,47 @@ class TestTtsEndpoint:
             resp_new = c.post("/tts", json={"text": "hi"},
                               headers={"X-Voice-Token": "token99"})
             assert resp_new.status_code == 200
+
+
+class TestTrainEndpoint:
+    @staticmethod
+    def _wav_header_bytes():
+        return b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    def test_rejects_hidden_dotfile_name(self, tmp_path, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_header_bytes()), ".bashrc", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+            assert resp.status_code == 400
+            assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_non_audio_magic_bytes_even_with_audio_mime(self, tmp_path, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(b"not audio"), "clip.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+            assert resp.status_code == 400
+            assert resp.get_json()["error"] == "Invalid audio file: clip.wav"
