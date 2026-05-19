@@ -442,6 +442,8 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello", "call_type": "cloned", "voice_id": "cloned"})
             assert resp.status_code == 200
+            assert resp.data == b"FAKE_AUDIO"
+            assert "audio/wav" in resp.content_type
 
         assert captured["voice_id"] == "local_voice_123"
 
