@@ -61,8 +61,10 @@ PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
 SAMPLES_DIR        = Path("voice_samples")
+<<<<<<< HEAD
 PRESET_WRITE_LOCK  = threading.Lock()
 SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
+SERVER_START_TIME  = time.time()
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
@@ -212,7 +214,13 @@ def _resolve_voice_settings(call_type: str) -> dict:
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "tts_engine": synthesize_speech is not None,
+        "api_key_configured": bool(os.environ.get("GOOGLE_API_KEY", "").strip()),
+        "auth_enabled": bool(VOICE_SERVER_TOKEN),
+        "uptime_seconds": int(max(0, time.time() - SERVER_START_TIME)),
+    })
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
