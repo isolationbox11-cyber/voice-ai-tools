@@ -151,7 +151,8 @@ def tts():
             return jsonify({"error": error}), 502
         return Response(audio_bytes, mimetype=mime_type or "audio/wav")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"TTS request failed: {e}", file=sys.stderr)
+        return jsonify({"error": "Failed to synthesize speech"}), 500
 
 # ── /presets ──────────────────────────────────────────────────────────
 @app.route("/presets", methods=["GET", "POST"])
