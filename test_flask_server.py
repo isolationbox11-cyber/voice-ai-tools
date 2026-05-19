@@ -3,7 +3,7 @@ Tests for flask_server.py – covers changes introduced in this PR:
   - Token header renamed from X-Token → X-Voice-Token
   - _check_token() logic (no-token dev mode, correct/wrong token)
   - _resolve_voice_settings() (custom_voice_config absent/present, voice_id injection)
-  - /health endpoint (GET → 200 {"status": "ok"})
+  - /health endpoint (GET → 200 with status + dependency/config flags)
   - /tts endpoint (auth, validation, synthesis success/failure)
 """
 
@@ -226,10 +226,29 @@ class TestHealthEndpoint:
         response = client_no_token.get("/health")
         assert response.status_code == 200
 
-    def test_returns_json_status_ok(self, client_no_token):
+    def test_returns_json_status_with_expected_fields(self, client_no_token):
         response = client_no_token.get("/health")
         data = response.get_json()
-        assert data == {"status": "ok"}
+        assert data["status"] == "ok"
+        assert data["tts_engine"] is True
+        assert data["api_key_configured"] is False
+        assert data["auth_enabled"] is False
+        assert isinstance(data["uptime_seconds"], int)
+        assert data["uptime_seconds"] >= 0
+
+    def test_reflects_env_and_auth_configuration(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "abc123")
+        monkeypatch.setenv("VOICE_SERVER_TOKEN", "secret123")
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            data = c.get("/health").get_json()
+            assert data["api_key_configured"] is True
+            assert data["auth_enabled"] is True
+
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
     def test_content_type_json(self, client_no_token):
         response = client_no_token.get("/health")
