@@ -56,16 +56,20 @@ def _patch_imports(monkeypatch):
 
 
 @pytest.fixture()
-def _reload_server(monkeypatch):
+def _clear_flask_server_module(monkeypatch):
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+    yield
+    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+
+@pytest.fixture()
+def _reload_server(_clear_flask_server_module):
     """
     Reload flask_server after env/module patches so that module-level
     VOICE_SERVER_TOKEN is re-read from the environment.
     """
-    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
     import flask_server as srv
     yield srv
-    # Clean up so next test starts fresh
-    monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +140,20 @@ class TestCheckToken:
         # X-Token (old name) should NOT work; only X-Voice-Token is valid.
         with srv.app.test_request_context("/tts", headers={"X-Token": "mysecret"}):
             assert srv._check_token() is False
+
+
+class TestStartupTokenEnforcement:
+    def test_import_fails_in_production_without_token(self, monkeypatch, _clear_flask_server_module):
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
+        with pytest.raises(RuntimeError, match="VOICE_SERVER_TOKEN must be set"):
+            importlib.import_module("flask_server")
+
+    def test_import_succeeds_in_production_with_token(self, monkeypatch, _clear_flask_server_module):
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("VOICE_SERVER_TOKEN", "prod-secret")
+        srv = importlib.import_module("flask_server")
+        assert srv.VOICE_SERVER_TOKEN == "prod-secret"
 
 
 # ===========================================================================
@@ -456,7 +474,7 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
             assert resp.status_code == 502
-            assert "error" in resp.get_json()
+            assert resp.get_json()["error"] == "API key not configured"
 
     def test_tts_engine_error_message_sanitized(self, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
@@ -469,6 +487,32 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
             assert resp.get_json()["error"] == "Speech synthesis failed"
+
+    def test_tts_engine_error_message_voice_model_unavailable(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="Voice model unavailable")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 502
+            assert resp.get_json()["error"] == "Voice model unavailable"
+
+    def test_tts_engine_error_message_timeout(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
+                                                   error="Request timed out after 30s")
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello"})
+            assert resp.status_code == 502
+            assert resp.get_json()["error"] == "Request timed out"
 
     def test_cloned_sentinel_voice_id_does_not_override_resolved_voice(self, monkeypatch):
         captured = []
