@@ -151,7 +151,7 @@ class TestResolveVoiceSettings:
         result = srv._resolve_voice_settings("LEGITIMATE")
         # Must include the fallback voice_id
         assert "voice_id" in result
-        assert result["voice_id"] == "en-US-Studio-O"
+        assert result["voice_id"] == "Kore"
 
     def test_fallback_sets_default_voice_id_for_scam(self, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
@@ -159,7 +159,7 @@ class TestResolveVoiceSettings:
         import flask_server as srv
 
         result = srv._resolve_voice_settings("SCAM_DETECTED")
-        assert result["voice_id"] == "en-US-Studio-O"
+        assert result["voice_id"] == "Kore"
 
     def test_uses_custom_voice_config_when_available(self, monkeypatch):
         custom_mod = types.ModuleType("custom_voice_config")
@@ -195,7 +195,7 @@ class TestResolveVoiceSettings:
         import flask_server as srv
 
         result = srv._resolve_voice_settings("LEGITIMATE")
-        assert result["voice_id"] == "en-US-Studio-O"
+        assert result["voice_id"] == "Kore"
 
 
 # ===========================================================================
@@ -407,7 +407,7 @@ class TestTtsEndpoint:
             assert resp.status_code == 502
             assert "error" in resp.get_json()
 
-    def test_tts_engine_error_message_propagated(self, monkeypatch):
+    def test_tts_engine_error_message_sanitized(self, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         tts_mod = sys.modules["tts_engine"]
         tts_mod.synthesize_speech = _make_tts_stub(audio_bytes=None,
@@ -418,6 +418,32 @@ class TestTtsEndpoint:
         with srv.app.test_client() as c:
             resp = c.post("/tts", json={"text": "hello"})
             assert resp.get_json()["error"] == "Speech synthesis failed"
+
+    def test_cloned_sentinel_voice_id_does_not_override_resolved_voice(self, monkeypatch):
+        captured = {}
+
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+        custom_mod = types.ModuleType("custom_voice_config")
+        custom_mod.CUSTOM_VOICE_ID = "local_voice_123"
+        custom_mod.get_custom_voice_settings = lambda ct: {"voice_id": "local_voice_123"}
+        monkeypatch.setitem(sys.modules, "custom_voice_config", custom_mod)
+
+        def recording_stub(text, voice_settings, **kwargs):
+            captured["voice_id"] = voice_settings.get("voice_id")
+            return b"FAKE_AUDIO", "audio/wav", None, text
+
+        tts_mod = sys.modules["tts_engine"]
+        tts_mod.synthesize_speech = recording_stub
+
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post("/tts", json={"text": "hello", "call_type": "cloned", "voice_id": "cloned"})
+            assert resp.status_code == 200
+
+        assert captured["voice_id"] == "local_voice_123"
 
     # ── Boundary / regression ────────────────────────────────────────────────
 

@@ -164,7 +164,11 @@ def tts():
             call_type = "LEGITIMATE"
         voice_settings = _resolve_voice_settings(call_type)
         explicit_voice_id = data.get("voice_id")
-        if isinstance(explicit_voice_id, str) and explicit_voice_id.strip():
+        if (
+            isinstance(explicit_voice_id, str)
+            and explicit_voice_id.strip()
+            and explicit_voice_id.strip().lower() != "cloned"
+        ):
             voice_settings = dict(voice_settings)
             voice_settings["voice_id"] = explicit_voice_id.strip()
         audio_bytes, mime_type, error, _ = synthesize_speech(text, voice_settings)
