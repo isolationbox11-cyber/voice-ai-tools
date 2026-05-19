@@ -8,8 +8,10 @@ Tests for flask_server.py – covers changes introduced in this PR:
 """
 
 import importlib
+import re
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -329,6 +331,14 @@ class TestTtsEndpoint:
             resp = c.post("/tts", json={"text": "a" * 2001})
             assert resp.status_code == 400
             assert "maximum length" in resp.get_json()["error"]
+
+    def test_flask_and_tts_max_text_length_are_aligned(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        tts_source = Path(__file__).with_name("tts_engine.py").read_text(encoding="utf-8")
+        match = re.search(r"^MAX_TEXT_LENGTH\s*=\s*(\d+)\s*$", tts_source, re.MULTILINE)
+        assert match is not None
+        assert srv.MAX_TEXT_LENGTH == int(match.group(1))
 
     # ── call_type handling ───────────────────────────────────────────────────
 
