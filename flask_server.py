@@ -205,6 +205,62 @@ def _is_audio_upload(file_storage) -> bool:
     return False
 
 
+def _is_audio_upload(file_storage) -> bool:
+    stream = getattr(file_storage, "stream", None)
+    if stream is None:
+        return False
+
+    try:
+        pos = stream.tell()
+    except Exception:
+        pos = 0
+
+    try:
+        header = stream.read(512) or b""
+    finally:
+        try:
+            stream.seek(pos)
+        except Exception:
+            pass
+
+    if not header:
+        return False
+
+    detected_mime = ""
+    if magic is not None:
+        try:
+            detected_mime = (magic.from_buffer(header, mime=True) or "").lower()
+        except Exception:
+            detected_mime = ""
+    if detected_mime.startswith("audio/"):
+        return True
+
+    if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
+        return True
+    if header.startswith(b"ID3"):
+        return True
+    if len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
+        return True
+    if header.startswith(b"OggS"):
+        return True
+    if header.startswith(b"fLaC"):
+        return True
+    if header.startswith(b"\x1A\x45\xDF\xA3"):
+        return True
+    if len(header) >= 16 and header[4:8] == b"ftyp":
+        major_brand = header[8:12]
+        compatible_brands = {
+            header[i:i + 4]
+            for i in range(16, len(header) - 3, 4)
+            if len(header[i:i + 4]) == 4
+        }
+        if major_brand in {b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42"}:
+            return True
+        if {b"M4A ", b"M4B "} & compatible_brands:
+            return True
+    return False
+
+
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(call_type: str) -> dict:
     try:
@@ -457,20 +513,19 @@ def train():
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
-    # Validate all files first before saving any, to avoid partial writes on error
+    saved = []
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe  = re.sub(r'[^\w.\-]', '_', fname)
-        safe  = Path(safe).name
+        safe = re.sub(r'[^\w.\-]', '_', fname)
+        safe = Path(safe).name
         if not safe or safe.startswith("."):
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
         validated.append((f, safe))
-    saved = []
     for f, safe in validated:
-        dest  = SAMPLES_DIR / safe
+        dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
     manifest = {
