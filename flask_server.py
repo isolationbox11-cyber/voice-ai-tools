@@ -69,6 +69,7 @@ VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
+AUDIO_HEADER_READ_SIZE = 512
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
@@ -168,7 +169,7 @@ def _is_audio_upload(file_storage) -> bool:
     except Exception:
         pos = 0
     try:
-        header = stream.read(512) or b""
+        header = stream.read(AUDIO_HEADER_READ_SIZE) or b""
     finally:
         try:
             stream.seek(pos)
