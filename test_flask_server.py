@@ -813,8 +813,10 @@ class TestTrainEndpoint:
                 data={"files": (io.BytesIO(self._mp42_ftyp_bytes()), "audio.m4a", "video/mp4")},
                 content_type="multipart/form-data",
             )
-        # Should not be rejected as invalid audio (magic + ftyp container check must combine)
-        assert resp.status_code != 400 or resp.get_json().get("error") != "Invalid audio file: audio.m4a"
+        # Should not be rejected as invalid audio (magic + ftyp container check must combine).
+        # Either the request succeeds (non-400) or it fails for a reason other than audio validation.
+        if resp.status_code == 400:
+            assert resp.get_json().get("error") != "Invalid audio file: audio.m4a"
 
     def test_multifile_no_partial_save_on_second_file_failure(self, tmp_path, monkeypatch):
         """When the second file in a multi-file upload fails validation, the first must not be saved."""
