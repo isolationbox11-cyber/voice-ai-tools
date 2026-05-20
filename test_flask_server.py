@@ -3,14 +3,16 @@ Tests for flask_server.py – covers changes introduced in this PR:
   - Token header renamed from X-Token → X-Voice-Token
   - _check_token() logic (no-token dev mode, correct/wrong token)
   - _resolve_voice_settings() (custom_voice_config absent/present, voice_id injection)
-  - /health endpoint (GET → 200 {"status": "ok"})
+  - /health endpoint (GET → 200 with status + dependency/config flags)
   - /tts endpoint (auth, validation, synthesis success/failure)
 """
 
 import importlib
 import io
+import json
 import sys
 import types
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -226,10 +228,61 @@ class TestHealthEndpoint:
         response = client_no_token.get("/health")
         assert response.status_code == 200
 
-    def test_returns_json_status_ok(self, client_no_token):
+    def test_returns_json_status_with_expected_fields(self, client_no_token):
         response = client_no_token.get("/health")
         data = response.get_json()
-        assert data == {"status": "ok"}
+        assert data["status"] == "ok"
+        assert isinstance(data["tts_engine"], bool)
+        assert isinstance(data["api_key_configured"], bool)
+        assert isinstance(data["auth_enabled"], bool)
+        assert data["tts_engine"]
+        assert isinstance(data["uptime_seconds"], int)
+        assert data["uptime_seconds"] >= 0
+
+    def test_reflects_unconfigured_env(self, monkeypatch):
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        monkeypatch.delenv("VOICE_SERVER_TOKEN", raising=False)
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        try:
+            import flask_server as srv
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["api_key_configured"] is False
+                assert data["auth_enabled"] is False
+        finally:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+    def test_reflects_env_and_auth_configuration(self, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "abc123")
+        monkeypatch.setenv("VOICE_SERVER_TOKEN", "secret123")
+        original_srv = sys.modules.get("flask_server")
+        try:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+            import flask_server as srv
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["api_key_configured"] is True
+                assert data["auth_enabled"] is True
+        finally:
+            if original_srv is not None:
+                sys.modules["flask_server"] = original_srv
+            else:
+                monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+
+    def test_reports_tts_engine_unavailable(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        try:
+            monkeypatch.setattr(srv, "synthesize_speech", None)
+            srv.app.config["TESTING"] = True
+            with srv.app.test_client() as c:
+                data = c.get("/health").get_json()
+                assert data["tts_engine"] is False
+        finally:
+            monkeypatch.delitem(sys.modules, "flask_server", raising=False)
 
     def test_content_type_json(self, client_no_token):
         response = client_no_token.get("/health")
@@ -399,6 +452,17 @@ class TestTtsEndpoint:
             resp = c.post("/tts", json={"text": "a" * 2001})
             assert resp.status_code == 400
             assert "maximum length" in resp.get_json()["error"]
+
+    def test_flask_and_tts_max_text_length_are_aligned(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        tts_path = Path(srv.__file__).with_name("tts_engine.py")
+        spec = importlib.util.spec_from_file_location("real_tts_engine_for_test", tts_path)
+        assert spec is not None
+        assert spec.loader is not None
+        tts_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tts_module)
+        assert srv.MAX_TEXT_LENGTH == tts_module.MAX_TEXT_LENGTH
 
     # ── call_type handling ───────────────────────────────────────────────────
 
@@ -637,10 +701,114 @@ class TestLogEndpoint:
             assert log_resp.status_code == 200
             assert log_resp.get_json() == {"entries": []}
 
+ 
+# ===========================================================================
+# /shodan
+# ===========================================================================
+
+class TestShodanEndpoint:
+    def test_returns_only_allowlisted_fields(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        class _Resp:
+            def json(self):
+                return {
+                    "ip_str": "1.2.3.4",
+                    "ports": [80, 443],
+                    "org": "Example Org",
+                    "country_name": "United States",
+                    "vulns": {"CVE-2024-0001": {}},
+                    "data": [{"port": 80, "banner": "Apache/2.4.1"}],
+                }
+
+        class _Requests:
+            @staticmethod
+            def get(*args, **kwargs):
+                return _Resp()
+
+        srv._requests = _Requests()
+        srv.SHODAN_API_KEY = "dummy"
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.get("/shodan?ip=1.2.3.4")
+            assert resp.status_code == 200
+            assert resp.get_json() == {
+                "ip_str": "1.2.3.4",
+                "ports": [80, 443],
+                "org": "Example Org",
+                "country_name": "United States",
+            }
+
+    def test_non_object_shodan_payload_returns_empty_object(self, monkeypatch):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        class _Resp:
+            def json(self):
+                return ["unexpected", "payload"]
+
+        class _Requests:
+            @staticmethod
+            def get(*args, **kwargs):
+                return _Resp()
+
+        srv._requests = _Requests()
+        srv.SHODAN_API_KEY = "dummy"
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.get("/shodan?ip=1.2.3.4")
+            assert resp.status_code == 200
+            assert resp.get_json() == {}
+
+# ===========================================================================
+# POST /train
+# ===========================================================================
+
 class TestTrainEndpoint:
     @staticmethod
     def _wav_header_bytes():
         return b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    def test_training_exception_is_sanitized_in_response_and_manifest(self, monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+
+        failing_training = types.ModuleType("voice_training")
+
+        def _raise_training_error(_sample_paths):
+            raise RuntimeError(f"failed reading {tmp_path}/very/secret/path.wav")
+
+        failing_training.train_from_samples = _raise_training_error
+        monkeypatch.setitem(sys.modules, "voice_training", failing_training)
+
+        srv.app.config["TESTING"] = True
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_header_bytes()), "sample.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] == "training_failed"
+        assert body["error"] == "Training failed. Check server logs."
+        assert str(tmp_path) not in body["error"]
+
+        manifest = json.loads((srv.MODEL_DIR / "manifest.json").read_text())
+        assert manifest["status"] == "training_failed"
+        assert manifest["error"] == "Training failed. Check server logs."
 
     def test_rejects_hidden_dotfile_name(self, tmp_path, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
