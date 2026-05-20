@@ -215,8 +215,17 @@ def _is_audio_upload(file_storage) -> bool:
         return True  # FLAC
     if header.startswith(b"\x1A\x45\xDF\xA3"):
         return True  # WebM/Matroska (audio/webm)
-    if len(header) >= 12 and header[4:8] == b"ftyp" and header[8:12] in {b"M4A ", b"M4B "}:
-        return True  # M4A/MP4 audio containers
+    if len(header) >= 16 and header[4:8] == b"ftyp":
+        major_brand = header[8:12]
+        compatible_brands = {
+            header[i:i + 4]
+            for i in range(16, len(header) - 3, 4)
+            if len(header[i:i + 4]) == 4
+        }
+        if major_brand in {b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42"}:
+            return True  # M4A/MP4 audio containers
+        if {b"M4A ", b"M4B "} & compatible_brands:
+            return True  # M4A/MP4 audio containers
     return False
 
 # ── voice-settings resolution ─────────────────────────────────────────
