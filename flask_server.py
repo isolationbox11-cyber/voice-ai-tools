@@ -69,6 +69,9 @@ VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
+# 512 bytes is sufficient to read a complete ftyp box in MP4/M4A containers
+# and the fixed-size magic headers used by WAV, MP3, OGG, FLAC, and WebM.
+AUDIO_HEADER_READ_SIZE = 512
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
 MODEL_DIR          = Path("voice_model")
@@ -159,28 +162,20 @@ def _check_token() -> bool:
         return True
     return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
 
-
 def _is_audio_upload(file_storage) -> bool:
     stream = getattr(file_storage, "stream", None)
     if stream is None:
         return False
-
     try:
+        if hasattr(stream, "seekable") and not stream.seekable():
+            return False
         pos = stream.tell()
+        header = stream.read(AUDIO_HEADER_READ_SIZE) or b""
+        stream.seek(pos)
     except Exception:
-        pos = 0
-
-    try:
-        header = stream.read(512) or b""
-    finally:
-        try:
-            stream.seek(pos)
-        except Exception:
-            pass
-
+        return False
     if not header:
         return False
-
     detected_mime = ""
     if magic is not None:
         try:
@@ -189,29 +184,33 @@ def _is_audio_upload(file_storage) -> bool:
             detected_mime = ""
     if detected_mime.startswith("audio/"):
         return True
-
+    # Container-based magic-byte checks for common training clip formats.
+    # These are evaluated even when python-magic is present so that audio-only
+    # containers (e.g. M4A / MP4 audio) that libmagic reports as "video/mp4"
+    # are still accepted by combining the MIME result with the byte-level check.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
-        return True
+        return True  # WAV
     if header.startswith(b"ID3"):
-        return True
+        return True  # MP3 (ID3-tagged)
     if len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
-        return True
+        return True  # MP3 (raw frame sync)
     if header.startswith(b"OggS"):
-        return True
+        return True  # OGG
     if header.startswith(b"fLaC"):
-        return True
+        return True  # FLAC
     if header.startswith(b"\x1A\x45\xDF\xA3"):
-        return True
+        return True  # WebM/Matroska (audio/webm)
     if len(header) >= 16 and header[4:8] == b"ftyp":
         major_brand = header[8:12]
-        compatible_brands = {
-            header[i:i + 4]
-            for i in range(16, len(header) - 3, 4)
-            if len(header[i:i + 4]) == 4
-        }
-        if major_brand in {b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42"}:
-            return True
+        compatible_brands = {header[i:i + 4] for i in range(16, len(header) - 3, 4)}
+        if major_brand in {b"M4A ", b"M4B "}:
+            return True  # M4A/MP4 audio containers
         if {b"M4A ", b"M4B "} & compatible_brands:
+            return True  # M4A/MP4 audio containers
+        # Accept any valid MP4 container when python-magic has already identified
+        # the file as video/mp4, since audio-only MP4s are commonly reported with
+        # that MIME type by libmagic (e.g. files with "mp42"/"isom" major brands).
+        if detected_mime.startswith("video/mp4"):
             return True
     return False
 
@@ -475,6 +474,9 @@ def train():
         safe = re.sub(r'[^\w.\-]', '_', fname)
         safe = Path(safe).name
         if not safe or safe.startswith("."):
+            # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
+            # deliberately rejected to prevent hidden or config files from
+            # being persisted in SAMPLES_DIR.
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
