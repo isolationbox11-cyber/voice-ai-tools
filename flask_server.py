@@ -198,7 +198,7 @@ def _is_audio_upload(file_storage) -> bool:
     if len(header) >= 16 and header[4:8] == b"ftyp":
         major_brand = header[8:12]
         compatible_brands = {header[i:i + 4] for i in range(16, len(header) - 3, 4)}
-        if major_brand in {b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42"}:
+        if major_brand in {b"M4A ", b"M4B "}:
             return True  # M4A/MP4 audio containers
         if {b"M4A ", b"M4B "} & compatible_brands:
             return True  # M4A/MP4 audio containers
