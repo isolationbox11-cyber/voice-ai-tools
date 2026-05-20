@@ -793,6 +793,7 @@ class TestTrainEndpoint:
             )
             assert resp.status_code == 400
             assert resp.get_json()["error"] == "Invalid filename"
+            assert list(srv.SAMPLES_DIR.iterdir()) == []
 
     def test_rejects_non_audio_magic_bytes_even_with_audio_mime(self, tmp_path, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
@@ -813,6 +814,7 @@ class TestTrainEndpoint:
             )
             assert resp.status_code == 400
             assert resp.get_json()["error"] == "Invalid audio file: clip.wav"
+            assert not (srv.SAMPLES_DIR / "clip.wav").exists()
 
     def test_training_exception_is_sanitized_in_response_and_manifest(self, monkeypatch, tmp_path):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
