@@ -1,0 +1,185 @@
+name: PR Visual Preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write   # needed to post the comment
+
+jobs:
+  screenshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── 2. Python + deps ───────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python deps
+        run: |
+          pip install --quiet \
+            flask flask-cors flask-limiter python-dotenv \
+            requests dnspython python-whois phonenumbers
+
+      # ── 3. Node + Playwright ───────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Playwright + Chromium
+        run: |
+          npm install -g playwright@latest
+          npx playwright install chromium --with-deps
+
+      # ── 4. Start Flask server in background ───────────────────────
+      - name: Start Flask server
+        env:
+          FLASK_ENV: development
+          PORT: 5001
+        run: |
+          python flask_server.py &
+          # Wait up to 15 s for the server to be ready
+          for i in $(seq 1 15); do
+            curl -sf http://127.0.0.1:5001/health && break
+            sleep 1
+          done
+
+      # ── 5. Take screenshots ────────────────────────────────────────
+      - name: Capture UI screenshots
+        run: |
+          mkdir -p screenshots
+          node - <<'EOF'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch();
+            const context = await browser.newContext({
+              viewport: { width: 1280, height: 800 },
+            });
+
+            // Helper: screenshot a URL
+            async function shot(url, filename, waitMs = 1500) {
+              const page = await context.newPage();
+              try {
+                await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
+                await page.waitForTimeout(waitMs);
+                await page.screenshot({ path: `screenshots/${filename}`, fullPage: true });
+                console.log(`captured: ${filename}`);
+              } catch (e) {
+                console.error(`failed ${filename}:`, e.message);
+              } finally {
+                await page.close();
+              }
+            }
+
+            // ── Visualizer HTML (file path served directly) ──────────
+            await shot(
+              'http://127.0.0.1:5001/',  // health page (confirms server is up)
+              '01-health.png'
+            );
+
+            // Open the static visualizer HTML
+            const fs = require('fs');
+            const path = require('path');
+            const htmlPath = path.resolve('interactive_voice_visualizer.html');
+            if (fs.existsSync(htmlPath)) {
+              const page2 = await context.newPage();
+              await page2.goto(`file://${htmlPath}`, { waitUntil: 'load' });
+              await page2.waitForTimeout(2000);
+              await page2.screenshot({ path: 'screenshots/02-visualizer.png', fullPage: true });
+              console.log('captured: 02-visualizer.png');
+              await page2.close();
+            }
+
+            // ── /api/lookup live response ─────────────────────────────
+            const page3 = await context.newPage();
+            await page3.setContent(`
+              <!DOCTYPE html><html><body style="background:#0d1117;color:#58a6ff;font-family:monospace;padding:24px">
+              <h2 style="color:#c9d1d9">/api/lookup live test</h2>
+              <pre id="out">loading...</pre>
+              <script>
+                fetch('http://127.0.0.1:5001/api/lookup',{
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({query:'github.com'})
+                }).then(r=>r.json()).then(d=>{
+                  document.getElementById('out').textContent=JSON.stringify(d,null,2);
+                }).catch(e=>{
+                  document.getElementById('out').textContent='error: '+e;
+                });
+              <\/script>
+              </body></html>
+            `);
+            await page3.waitForTimeout(4000);
+            await page3.screenshot({ path: 'screenshots/03-lookup-result.png', fullPage: true });
+            console.log('captured: 03-lookup-result.png');
+            await page3.close();
+
+            await browser.close();
+          })();
+          EOF
+
+      # ── 6. Upload screenshots as workflow artifact ─────────────────
+      - name: Upload screenshots artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-screenshots
+          path: screenshots/
+          retention-days: 14
+
+      # ── 7. Post screenshots as PR comment ──────────────────────────
+      - name: Post screenshot comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const runId = context.runId;
+            const artifactUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+
+            // List captured screenshots
+            const dir = 'screenshots';
+            let files = [];
+            try { files = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort(); } catch {}
+
+            const labels = {
+              '01-health.png':       '🟢 Flask `/health` — server up',
+              '02-visualizer.png':   '🎙️ Interactive Voice Visualizer',
+              '03-lookup-result.png':'🔍 `/api/lookup` live result (github.com)',
+            };
+
+            let body = `## 📸 Automatic Visual Preview\n\n`;
+            body += `> Generated on commit \`${context.sha.slice(0,7)}\` — [full run & artifacts](${artifactUrl})\n\n`;
+
+            if (files.length === 0) {
+              body += '_No screenshots captured — check the workflow logs._';
+            } else {
+              body += '| Screenshot | Description |\n|---|---|\n';
+              for (const f of files) {
+                const label = labels[f] || f.replace(/^\d+-/, '').replace('.png', '');
+                // Embed as artifact download link (images render inline in GH comments
+                // only when uploaded to the PR or via a public URL; we link to the run)
+                body += `| **${label}** | [Download / view in artifacts](${artifactUrl}) |\n`;
+              }
+              body += `\n> 💡 **Tip:** Download the \`pr-screenshots\` artifact from the link above to view full-resolution images.\n`;
+            }
+
+            // Delete any previous auto-preview comment to avoid spam
+            const comments = await github.rest.issues.listComments({ owner, repo, issue_number: prNumber });
+            for (const c of comments.data) {
+              if (c.body.startsWith('## 📸 Automatic Visual Preview')) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: c.id });
+              }
+            }
+
+            await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
