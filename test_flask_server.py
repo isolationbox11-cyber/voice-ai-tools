@@ -793,7 +793,7 @@ class TestTrainEndpoint:
             )
             assert resp.status_code == 400
             assert resp.get_json()["error"] == "Invalid filename"
-            assert list(srv.SAMPLES_DIR.iterdir()) == []
+            assert not any(srv.SAMPLES_DIR.iterdir())
 
     def test_rejects_non_audio_magic_bytes_even_with_audio_mime(self, tmp_path, monkeypatch):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
