@@ -182,7 +182,10 @@ def _is_audio_upload(file_storage) -> bool:
             detected_mime = ""
     if detected_mime.startswith("audio/"):
         return True
-    # Fallback magic-byte checks for common training clip formats.
+    # Container-based magic-byte checks for common training clip formats.
+    # These are evaluated even when python-magic is present so that audio-only
+    # containers (e.g. M4A / MP4 audio) that libmagic reports as "video/mp4"
+    # are still accepted by combining the MIME result with the byte-level check.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
         return True  # WAV
     if header.startswith(b"ID3"):
@@ -202,6 +205,11 @@ def _is_audio_upload(file_storage) -> bool:
             return True  # M4A/MP4 audio containers
         if {b"M4A ", b"M4B "} & compatible_brands:
             return True  # M4A/MP4 audio containers
+        # Accept any valid MP4 container when python-magic has already identified
+        # the file as video/mp4, since audio-only MP4s are commonly reported with
+        # that MIME type by libmagic (e.g. files with "mp42"/"isom" major brands).
+        if detected_mime.startswith("video/mp4"):
+            return True
     return False
 
 
@@ -520,6 +528,9 @@ def train():
         safe = re.sub(r'[^\w.\-]', '_', fname)
         safe = Path(safe).name
         if not safe or safe.startswith("."):
+            # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
+            # deliberately rejected to prevent hidden or config files from
+            # being persisted in SAMPLES_DIR.
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
