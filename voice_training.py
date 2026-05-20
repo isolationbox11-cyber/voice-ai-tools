@@ -71,25 +71,26 @@ def train_from_samples(sample_paths: list) -> str | None:
     wav_paths = []
     for path in sample_paths:
         p = Path(path).resolve()
-        if not _is_within_root(p, _SAFE_SAMPLES_ROOT):
-            print(f"Rejected file outside samples directory: {p}")
+        trusted_src = (_SAFE_SAMPLES_ROOT / p.name).resolve()
+        if not _is_within_root(trusted_src, _SAFE_SAMPLES_ROOT):
+            print(f"Rejected file outside samples directory: {trusted_src}")
             continue
         # Validate extension before touching the file
-        if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
-            print(f"Rejected file with disallowed extension: {p.name}")
+        if trusted_src.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
+            print(f"Rejected file with disallowed extension: {trusted_src.name}")
             continue
-        if p.suffix.lower() == ".wav":
-            wav_paths.append(str(p))
+        if trusted_src.suffix.lower() == ".wav":
+            wav_paths.append(str(trusted_src))
         else:
             # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = p.with_suffix(".wav").resolve()
+            wav_path = trusted_src.with_suffix(".wav").resolve()
             if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
                 print(f"Rejected conversion target outside samples directory: {wav_path}")
                 continue
-            if _convert_to_wav(p, wav_path):
+            if _convert_to_wav(trusted_src, wav_path):
                 wav_paths.append(str(wav_path))
             else:
-                print(f"Conversion failed for {p.name}, skipping.")
+                print(f"Conversion failed for {trusted_src.name}, skipping.")
 
     if not wav_paths:
         print("No usable wav files after conversion.")
