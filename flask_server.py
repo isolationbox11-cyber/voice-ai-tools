@@ -165,16 +165,13 @@ def _is_audio_upload(file_storage) -> bool:
     if stream is None:
         return False
     try:
+        if hasattr(stream, "seekable") and not stream.seekable():
+            return False
         pos = stream.tell()
-    except Exception:
-        pos = 0
-    try:
         header = stream.read(AUDIO_HEADER_READ_SIZE) or b""
-    finally:
-        try:
-            stream.seek(pos)
-        except Exception:
-            pass
+        stream.seek(pos)
+    except Exception:
+        return False
     if not header:
         return False
     detected_mime = ""
