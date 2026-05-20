@@ -69,6 +69,8 @@ VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
+# 512 bytes is sufficient to read a complete ftyp box in MP4/M4A containers
+# and the fixed-size magic headers used by WAV, MP3, OGG, FLAC, and WebM.
 AUDIO_HEADER_READ_SIZE = 512
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
