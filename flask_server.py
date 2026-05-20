@@ -434,10 +434,11 @@ def train():
             manifest["note"] = "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
     except ImportError:
         manifest["status"] = "samples_saved"
-        manifest["note"]   = "voice_training.py not found — samples saved only"
-    except Exception as e:
+        manifest["note"] = "voice_training.py not found — samples saved only"
+    except Exception:
+        app.logger.exception("Training failed")
         manifest["status"] = "training_failed"
-        manifest["error"]  = str(e)
+        manifest["error"] = "Training failed. Check server logs."
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
     return jsonify({"ok": True, "saved": saved, **manifest})
