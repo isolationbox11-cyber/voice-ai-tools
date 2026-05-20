@@ -5,6 +5,16 @@ from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+_SAFE_SAMPLES_ROOT = Path("samples").resolve()
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    """Return True if path resolves inside root."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
 
 # ── Coqui XTTS v2 lazy loader ───────────────────────────────────────
 _tts_model = None
@@ -60,7 +70,10 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        p = Path(path)
+        p = Path(path).resolve()
+        if not _is_within_root(p, _SAFE_SAMPLES_ROOT):
+            print(f"Rejected file outside samples directory: {p}")
+            continue
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {p.name}")
@@ -69,7 +82,10 @@ def train_from_samples(sample_paths: list) -> str | None:
             wav_paths.append(str(p))
         else:
             # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = p.with_suffix(".wav")
+            wav_path = p.with_suffix(".wav").resolve()
+            if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
+                print(f"Rejected conversion target outside samples directory: {wav_path}")
+                continue
             if _convert_to_wav(p, wav_path):
                 wav_paths.append(str(wav_path))
             else:
