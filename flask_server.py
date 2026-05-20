@@ -474,6 +474,7 @@ def train():
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
     saved = []
+    validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
         safe = re.sub(r'[^\w.\-]', '_', fname)
@@ -482,6 +483,9 @@ def train():
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
+        validated.append((f, safe))
+
+    for f, safe in validated:
         dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
