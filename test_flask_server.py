@@ -775,6 +775,75 @@ class TestTrainEndpoint:
         return b"RIFF\x24\x00\x00\x00WAVEfmt "
 
 
+    @staticmethod
+    def _mp42_ftyp_bytes():
+        """Minimal ftyp box with mp42 major brand — generic audio-only MP4 container."""
+        return (
+            b'\x00\x00\x00\x18'  # box size = 24 bytes
+            b'ftyp'               # box type
+            b'mp42'               # major brand (not M4A /M4B, so magic-byte check alone rejects it)
+            b'\x00\x00\x00\x00'  # minor version
+            b'mp42'               # compatible brand
+            b'isom'               # compatible brand
+        )
+
+    def test_accepts_mp4_container_when_magic_reports_video_mp4(self, tmp_path, monkeypatch):
+        """Audio-only MP4s that libmagic reports as video/mp4 must be accepted."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        # Provide a fake magic module so the test is deterministic regardless of
+        # whether python-magic is installed in the test environment.
+        class _FakeMagic:
+            @staticmethod
+            def from_buffer(_buf, mime=False):
+                return "video/mp4"
+
+        monkeypatch.setattr(srv, "magic", _FakeMagic, raising=False)
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._mp42_ftyp_bytes()), "audio.m4a", "video/mp4")},
+                content_type="multipart/form-data",
+            )
+        # Should not be rejected as invalid audio (magic + ftyp container check must combine)
+        assert resp.status_code != 400 or resp.get_json().get("error") != "Invalid audio file: audio.m4a"
+
+    def test_multifile_no_partial_save_on_second_file_failure(self, tmp_path, monkeypatch):
+        """When the second file in a multi-file upload fails validation, the first must not be saved."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={
+                    "files": [
+                        (io.BytesIO(self._wav_header_bytes()), "good.wav", "audio/wav"),
+                        (io.BytesIO(b"definitely not audio"), "bad.wav", "audio/wav"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid audio file: bad.wav"
+        # The first (valid) file must NOT have been persisted because validation failed
+        assert not (srv.SAMPLES_DIR / "good.wav").exists()
+
     def test_training_exception_is_sanitized_in_response_and_manifest(self, monkeypatch, tmp_path):
         monkeypatch.delitem(sys.modules, "flask_server", raising=False)
         import flask_server as srv
