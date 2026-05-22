@@ -944,3 +944,264 @@ class TestTrainEndpoint:
             assert resp.status_code == 400
             assert resp.get_json()["error"] == "Invalid audio file: bad.wav"
             assert not (srv.SAMPLES_DIR / "good.wav").exists()
+
+
+# ===========================================================================
+# POST /train – filename validation (PR security hardening)
+# Tests for the new path-traversal rejection and strict allowlist regex.
+# ===========================================================================
+
+class TestTrainFilenameValidation:
+    """Covers filename validation changes introduced in this PR:
+    - Reject path-like names (fname != Path(fname).name)
+    - Strict allowlist regex [A-Za-z0-9][A-Za-z0-9._-]{0,127}
+    - Resolved-path traversal check (dest.relative_to(base_dir))
+    """
+
+    @staticmethod
+    def _wav_bytes():
+        return b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    @staticmethod
+    def _setup_srv(monkeypatch, tmp_path):
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+        return srv
+
+    def test_rejects_path_traversal_with_dotdot(self, tmp_path, monkeypatch):
+        """Filename containing '..' path component must be rejected before audio validation."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "../evil.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_filename_with_subdirectory_component(self, tmp_path, monkeypatch):
+        """Filename containing a '/' directory separator is a path-like name and must be rejected."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "subdir/clip.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_filename_starting_with_underscore(self, tmp_path, monkeypatch):
+        """First character must be alphanumeric per the strict allowlist regex."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "_clip.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_filename_with_space(self, tmp_path, monkeypatch):
+        """Spaces are not in the safe-chars allowlist [A-Za-z0-9._-] and must be rejected."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "my clip.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_filename_exceeding_128_chars(self, tmp_path, monkeypatch):
+        """Filenames longer than 128 characters must be rejected by the regex."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        long_name = "a" + "b" * 128  # 129 chars total – one over the limit
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), long_name, "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_accepts_filename_at_exact_max_length(self, tmp_path, monkeypatch):
+        """A 128-character filename (the allowlist maximum) must not be rejected for length."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        max_name = "a" + "b" * 127  # 128 chars – right at the limit
+
+        # Stub train_from_samples to avoid heavy dependencies
+        vt_stub = types.ModuleType("voice_training")
+        vt_stub.train_from_samples = lambda paths: None
+        monkeypatch.setitem(sys.modules, "voice_training", vt_stub)
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), max_name, "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        # Must not be rejected due to filename length or pattern – audio validation may fail
+        # without python-magic, but error must not say "Invalid filename".
+        assert resp.get_json().get("error") != "Invalid filename"
+
+    def test_accepts_valid_alphanumeric_filename(self, tmp_path, monkeypatch):
+        """A plain alphanumeric filename with allowed punctuation must pass all checks."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+
+        vt_stub = types.ModuleType("voice_training")
+        vt_stub.train_from_samples = lambda paths: None
+        monkeypatch.setitem(sys.modules, "voice_training", vt_stub)
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "clip123.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.get_json().get("error") != "Invalid filename"
+
+    def test_rejects_filename_with_at_sign(self, tmp_path, monkeypatch):
+        """'@' is not in the safe-chars allowlist and must be rejected."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "clip@host.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_rejects_filename_with_pipe_character(self, tmp_path, monkeypatch):
+        """'|' is not in the safe-chars allowlist and must be rejected."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "clip|cmd.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+    def test_single_char_filename_accepted_by_regex(self, tmp_path, monkeypatch):
+        """A single alphanumeric character is the minimum valid filename length."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+
+        vt_stub = types.ModuleType("voice_training")
+        vt_stub.train_from_samples = lambda paths: None
+        monkeypatch.setitem(sys.modules, "voice_training", vt_stub)
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "a", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.get_json().get("error") != "Invalid filename"
+
+    def test_rejects_absolute_path_as_filename(self, tmp_path, monkeypatch):
+        """/etc/passwd as filename must be caught by the path-like name check."""
+        srv = self._setup_srv(monkeypatch, tmp_path)
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "/etc/passwd", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "Invalid filename"
+
+
+# ===========================================================================
+# POST /train – saved_paths passed to train_from_samples (PR change)
+# Verifies that train_from_samples receives resolved absolute paths rather
+# than paths reconstructed from SAMPLES_DIR and the user-supplied filename.
+# ===========================================================================
+
+class TestTrainSavedPathsToTrainFromSamples:
+    """Verify that saved_paths (resolved absolute paths) are passed to
+    train_from_samples instead of the old SAMPLES_DIR / safe reconstruction."""
+
+    @staticmethod
+    def _wav_bytes():
+        return b"RIFF\x24\x00\x00\x00WAVEfmt "
+
+    def test_train_from_samples_receives_absolute_resolved_paths(self, tmp_path, monkeypatch):
+        """train_from_samples must receive absolute, fully-resolved paths."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        captured_paths = []
+
+        vt_stub = types.ModuleType("voice_training")
+        vt_stub.train_from_samples = lambda paths: captured_paths.extend(paths) or "test_voice_id"
+        monkeypatch.setitem(sys.modules, "voice_training", vt_stub)
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={"files": (io.BytesIO(self._wav_bytes()), "sample.wav", "audio/wav")},
+                content_type="multipart/form-data",
+            )
+
+        assert resp.status_code == 200
+        assert len(captured_paths) == 1
+        captured = captured_paths[0]
+        # Must be an absolute path
+        assert Path(captured).is_absolute(), f"Expected absolute path, got: {captured!r}"
+        # Must end with the filename
+        assert captured.endswith("sample.wav")
+        # Must be within SAMPLES_DIR
+        assert str(srv.SAMPLES_DIR.resolve()) in captured
+
+    def test_train_from_samples_receives_multiple_absolute_paths(self, tmp_path, monkeypatch):
+        """All files in a multi-file upload must produce absolute paths."""
+        monkeypatch.delitem(sys.modules, "flask_server", raising=False)
+        import flask_server as srv
+        srv.VOICE_SERVER_TOKEN = ""
+        srv.SAMPLES_DIR = tmp_path / "voice_samples"
+        srv.MODEL_DIR = tmp_path / "voice_model"
+        srv.SAMPLES_DIR.mkdir(exist_ok=True)
+        srv.MODEL_DIR.mkdir(exist_ok=True)
+        srv.app.config["TESTING"] = True
+
+        captured_paths = []
+
+        vt_stub = types.ModuleType("voice_training")
+        vt_stub.train_from_samples = lambda paths: captured_paths.extend(paths) or "test_voice_id"
+        monkeypatch.setitem(sys.modules, "voice_training", vt_stub)
+
+        with srv.app.test_client() as c:
+            resp = c.post(
+                "/train",
+                data={
+                    "files": [
+                        (io.BytesIO(self._wav_bytes()), "clip1.wav", "audio/wav"),
+                        (io.BytesIO(self._wav_bytes()), "clip2.wav", "audio/wav"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+        assert resp.status_code == 200
+        assert len(captured_paths) == 2
+        for path in captured_paths:
+            assert Path(path).is_absolute(), f"Expected absolute path, got: {path!r}"
