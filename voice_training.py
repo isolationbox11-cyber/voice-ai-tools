@@ -71,12 +71,13 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        candidate = Path(str(path)).resolve()
+        sample_name = Path(str(path)).name
+        if not sample_name or sample_name.startswith("."):
+            print(f"Rejected invalid sample name: {sample_name!r}")
+            continue
+        candidate = (_SAFE_SAMPLES_ROOT / sample_name).resolve()
         if not _is_within_root(candidate, _SAFE_SAMPLES_ROOT):
             print(f"Rejected file outside samples directory: {candidate}")
-            continue
-        if not candidate.name or candidate.name.startswith("."):
-            print(f"Rejected invalid sample name: {candidate.name!r}")
             continue
         trusted_src = candidate
         if not trusted_src.exists() or not trusted_src.is_file():
