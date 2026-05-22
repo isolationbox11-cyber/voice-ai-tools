@@ -49,7 +49,7 @@ def _convert_to_wav(src: Path, dst: Path) -> bool:
         )
         return result.returncode == 0 and dst.exists()
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"ffmpeg error for {src}: {e}")
+        print(f"ffmpeg error: {e}")
         return False
 
 
@@ -134,11 +134,16 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     # Load the model and compute speaker embedding from all clips
     model = _get_coqui_model()
+    # Store only filenames (not absolute paths) in the JSON metadata so server-internal
+    # paths are not persisted.  The absolute paths in wav_paths are still used in-memory
+    # for the Coqui model call and are stored separately by _write_voice_config for
+    # tts_engine to use.
+    sample_filenames = [Path(p).name for p in wav_paths]
     if model is None:
         import json
         embedding_path.write_text(json.dumps({
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "fallback"
         }))
         _write_voice_config(voice_id, wav_paths, engine="fallback")
@@ -153,7 +158,7 @@ def train_from_samples(sample_paths: list) -> str | None:
         import torch
         embedding_data = {
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "coqui_xtts_v2",
             "gpt_cond_latent": gpt_cond_latent.cpu().tolist(),
             "speaker_embedding": speaker_embedding.cpu().tolist(),
@@ -167,7 +172,7 @@ def train_from_samples(sample_paths: list) -> str | None:
         import json
         embedding_path.write_text(json.dumps({
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "fallback"
         }))
         _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
