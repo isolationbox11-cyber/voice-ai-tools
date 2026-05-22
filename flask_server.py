@@ -446,8 +446,9 @@ def analyze_pdf():
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
             return jsonify(result)
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        except Exception:
+            app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
+            return jsonify({"error": "Failed to analyze PDF"}), 500
 
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
     raw_str   = raw.decode("latin-1", errors="ignore")
