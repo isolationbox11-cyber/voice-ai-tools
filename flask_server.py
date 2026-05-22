@@ -468,12 +468,18 @@ def train():
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
     saved = []
+    saved_paths = []
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r'[^\w.\-]', '_', fname)
-        safe = Path(safe).name
-        if not safe or safe.startswith("."):
+        # Reject path-like names instead of rewriting them.
+        if fname != Path(fname).name:
+            return jsonify({"error": "Invalid filename"}), 400
+        safe = fname
+        # Strict allowlist for filenames: basename only, safe chars, bounded length.
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", safe):
+            return jsonify({"error": "Invalid filename"}), 400
+        if safe.startswith("."):
             # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
             # deliberately rejected to prevent hidden or config files from
             # being persisted in SAMPLES_DIR.
@@ -481,10 +487,16 @@ def train():
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
         validated.append((f, safe))
+    base_dir = SAMPLES_DIR.resolve()
     for f, safe in validated:
-        dest = SAMPLES_DIR / safe
+        dest = (base_dir / safe).resolve()
+        try:
+            dest.relative_to(base_dir)
+        except ValueError:
+            return jsonify({"error": "Invalid filename"}), 400
         f.save(dest)
         saved.append(safe)
+        saved_paths.append(str(dest))
     manifest = {
         "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
@@ -496,7 +508,7 @@ def train():
     voice_id = None
     try:
         from voice_training import train_from_samples
-        voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
+        voice_id = train_from_samples(saved_paths)
         manifest["status"] = "trained" if voice_id else "samples_saved"
         if voice_id:
             manifest["voice_id"] = voice_id
