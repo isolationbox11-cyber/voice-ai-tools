@@ -76,16 +76,38 @@ class TestTrainFromSamples:
     def test_returns_none_for_empty_input(self):
         assert voice_training.train_from_samples([]) is None
 
-    def test_rejects_disallowed_extension(self, tmp_path):
-        bad = tmp_path / "clip.exe"
-        bad.write_bytes(b"MZ")
-        result = voice_training.train_from_samples([str(bad)])
+    def test_rejects_disallowed_extension(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
+        disallowed_file = tmp_path / "clip.exe"
+        disallowed_file.write_bytes(b"MZ")
+        result = voice_training.train_from_samples([str(disallowed_file)])
+        assert result is None
+
+    def test_rejects_path_traversal(self, tmp_path, monkeypatch):
+        """Paths that resolve outside the trusted samples root must be silently skipped."""
+        trusted_root = tmp_path / "samples"
+        trusted_root.mkdir()
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", trusted_root.resolve())
+        # Create a valid WAV file *outside* the trusted root.
+        outside_wav = _make_wav(tmp_path, "escape.wav")
+        result = voice_training.train_from_samples([str(outside_wav)])
+        assert result is None
+
+    def test_rejects_relative_traversal(self, tmp_path, monkeypatch):
+        """Relative traversal strings (../../etc) must be rejected, not resolved."""
+        trusted_root = tmp_path / "samples"
+        trusted_root.mkdir()
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", trusted_root.resolve())
+        # A path designed to escape the root via relative traversal.
+        traversal_path = "../../etc/passwd"
+        result = voice_training.train_from_samples([traversal_path])
         assert result is None
 
     def test_fallback_writes_voice_config(self, tmp_path, monkeypatch):
         """When Coqui is unavailable, _write_voice_config must still be called."""
         wav = _make_wav(tmp_path)
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
         (tmp_path / "voice_embeddings").mkdir(exist_ok=True)
 
         monkeypatch.setattr(voice_training, "_get_coqui_model", lambda: None)
@@ -110,6 +132,7 @@ class TestTrainFromSamples:
         """
         wav = _make_wav(tmp_path)
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
         (tmp_path / "voice_embeddings").mkdir(exist_ok=True)
 
         # Build a fake model whose latents are plain Python lists (no real torch)

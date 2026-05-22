@@ -1,10 +1,24 @@
 import os
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+
+# Trusted root for all training-sample files.  Paths that resolve outside
+# this directory are rejected before any file operation is performed.
+_SAFE_SAMPLES_ROOT = Path("voice_samples").resolve()
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    """Return True if an already-resolved *path* is inside an already-resolved *root*."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 # ── Coqui XTTS v2 lazy loader ───────────────────────────────────────
 _tts_model = None
@@ -58,9 +72,30 @@ def train_from_samples(sample_paths: list) -> str | None:
     if not sample_paths:
         return None
 
+    # Build a map of filename → fully-resolved trusted path for every real
+    # file currently in the samples root.  Using iterdir() means that no path
+    # used in later file operations is derived from user-controlled data.
+    trusted_files: dict[str, Path] = {}
+    if _SAFE_SAMPLES_ROOT.is_dir():
+        for entry in _SAFE_SAMPLES_ROOT.iterdir():
+            resolved = entry.resolve()
+            if _is_within_root(resolved, _SAFE_SAMPLES_ROOT) and resolved.is_file():
+                trusted_files[entry.name] = resolved
+
     wav_paths = []
     for path in sample_paths:
-        p = Path(path)
+        # Accept only the bare filename; discard any directory components from
+        # the caller's value to prevent directory-traversal attempts.
+        fname = Path(path).name
+        if not fname or fname.startswith("."):
+            print(f"Rejected invalid sample name: {fname!r}")
+            continue
+        # Look up the file in the trusted directory listing.  The path used for
+        # every subsequent file operation comes from iterdir(), not user input.
+        p = trusted_files.get(fname)
+        if p is None:
+            print(f"Sample not found in trusted root: {fname!r}")
+            continue
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {p.name}")
@@ -68,8 +103,9 @@ def train_from_samples(sample_paths: list) -> str | None:
         if p.suffix.lower() == ".wav":
             wav_paths.append(str(p))
         else:
-            # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = p.with_suffix(".wav")
+            # Use a server-generated name so the output path is never derived
+            # from user-controlled input.
+            wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
             if _convert_to_wav(p, wav_path):
                 wav_paths.append(str(wav_path))
             else:
