@@ -1,6 +1,7 @@
 import os
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 # Allowed audio extensions for voice training clips
@@ -86,7 +87,9 @@ def train_from_samples(sample_paths: list) -> str | None:
             print(f"Rejected file with disallowed extension: {trusted_src.name}")
             continue
         if trusted_src.suffix.lower() == ".wav":
-            wav_paths.append(str(trusted_src))
+            # Use a server-generated destination filename to avoid deriving output
+            # paths from user-controlled input names.
+            wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
         else:
             # Convert to wav using subprocess list-form (no shell injection possible)
             wav_path = trusted_src.with_suffix(".wav").resolve()
