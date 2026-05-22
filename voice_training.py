@@ -93,7 +93,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             if _convert_to_wav(trusted_src, wav_path):
                 wav_paths.append(str(wav_path))
             else:
-                print(f"Conversion failed for {trusted_src.name}, skipping.")
+                print("Conversion failed for an input clip, skipping.")
 
     if not wav_paths:
         print("No usable wav files after conversion.")
