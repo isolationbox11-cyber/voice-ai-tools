@@ -71,7 +71,12 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        sample_name = Path(str(path)).name
+        raw_path = str(path)
+        input_path = Path(raw_path)
+        sample_name = input_path.name
+        if raw_path != sample_name:
+            print(f"Rejected non-filename sample path: {raw_path!r}")
+            continue
         if not sample_name or sample_name.startswith("."):
             print(f"Rejected invalid sample name: {sample_name!r}")
             continue
