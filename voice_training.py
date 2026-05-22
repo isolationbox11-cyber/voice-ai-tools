@@ -76,7 +76,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             continue
         if not candidate.name or candidate.name.startswith("."):
             print(f"Rejected invalid sample name: {candidate.name!r}")
-            continue
+            print("Rejected file outside samples directory.")
         if not candidate.exists() or not candidate.is_file():
             print(f"Rejected missing sample file: {candidate}")
             continue
