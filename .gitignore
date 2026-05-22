@@ -1,57 +1,9 @@
-# ===========================================================
-# SECRETS & CREDENTIALS  — never commit these
-# ===========================================================
-.env
-.env.*
-*.env
-.envrc
-
-# Explicit secret/key file name patterns
-*secret*
-*secrets*
-*credential*
-*credentials*
-*api_key*
-*apikey*
-*api-key*
-*token*
-*private_key*
-*privatekey*
-*access_key*
-
-# Google / GCP service account JSON
-*service_account*.json
-*serviceaccount*.json
-gcloud-key*.json
-
-# Common config files that often contain keys
-config.local.*
-settings.local.*
-local_settings.*
-*.pem
-*.key
-*.p12
-*.pfx
-*.crt
-*.cer
-
-# ===========================================================
-# PROJECT-SPECIFIC GENERATED / USER FILES
-# ===========================================================
+# Generated / user-specific files
 custom_voice_config.py
 voice_samples/
 voice_detection_log.json
-voice_model/
-session_log.json
-voice_presets.json
 
-# TTS engine debug audio output
-tests/infer_cli_basic.wav
-tests/infer_cli_*.wav
-
-# ===========================================================
-# PYTHON
-# ===========================================================
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
@@ -61,87 +13,26 @@ dist/
 build/
 .eggs/
 *.egg
-
-# Virtual environments
 .venv/
 venv/
 env/
-.python-version
 
-# MyPy / type checking
-.mypy_cache/
-.dmypy.json
-dmypy.json
+# Environment
+.env
+.env.*
 
-# Pytest / coverage
-.pytest_cache/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
-
-# ===========================================================
-# JAVASCRIPT / NODE
-# ===========================================================
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-package-lock.json
-yarn.lock
-
-# JS build output
-dist/
-build/
-.next/
-.nuxt/
-out/
-
-# ===========================================================
-# CHROME EXTENSION BUILD OUTPUT
-# ===========================================================
-extension-dist/
-extension-build/
-*.crx
-*.pem
-
-# ===========================================================
-# LOGS
-# ===========================================================
+# Logs
 *.log
-logs/
-*.log.*
+session_log.json
 
-# ===========================================================
-# DEPLOY / HOSTING CONFIGS  (often contain tokens)
-# ===========================================================
-.vercel/
-.netlify/
-.railway/
-.render/
-fly.toml
-wrangler.toml
+# Cache directories
+.codesight/
+.npm-cache/
+.snapshots/
 
-# ===========================================================
-# IDE / EDITOR
-# ===========================================================
-.vscode/
-.idea/
-*.sublime-project
-*.sublime-workspace
-*.swp
-*.swo
-*~
+# Voice presets (user-specific)
+voice_presets.json
 
-# ===========================================================
 # OS
-# ===========================================================
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
 Thumbs.db
-ehthumbs.db
-desktop.ini
