@@ -86,6 +86,7 @@ class TestTrainFromSamples:
         """When Coqui is unavailable, _write_voice_config must still be called."""
         wav = _make_wav(tmp_path)
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
         (tmp_path / "voice_embeddings").mkdir(exist_ok=True)
 
         monkeypatch.setattr(voice_training, "_get_coqui_model", lambda: None)
@@ -110,6 +111,7 @@ class TestTrainFromSamples:
         """
         wav = _make_wav(tmp_path)
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
         (tmp_path / "voice_embeddings").mkdir(exist_ok=True)
 
         # Build a fake model whose latents are plain Python lists (no real torch)

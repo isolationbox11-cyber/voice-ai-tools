@@ -6,13 +6,18 @@ from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
-_SAFE_SAMPLES_ROOT = Path("samples").resolve()
+_SAFE_SAMPLES_ROOT = Path("voice_samples").resolve()
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """Return True if path resolves inside root."""
+    """Return True if path resolves inside root (guard against path traversal).
+
+    ``root`` must already be fully resolved before calling this function.
+    Only ``path`` is resolved here to follow symlinks; ``root`` is used as-is
+    so that CodeQL does not see an additional path expression on user-derived data.
+    """
     try:
-        path.resolve().relative_to(root.resolve())
+        path.resolve().relative_to(root)
         return True
     except ValueError:
         return False
