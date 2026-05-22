@@ -472,9 +472,14 @@ def train():
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r'[^\w.\-]', '_', fname)
-        safe = Path(safe).name
-        if not safe or safe.startswith("."):
+        # Reject path-like names instead of rewriting them.
+        if fname != Path(fname).name:
+            return jsonify({"error": "Invalid filename"}), 400
+        safe = fname
+        # Strict allowlist for filenames: basename only, safe chars, bounded length.
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", safe):
+            return jsonify({"error": "Invalid filename"}), 400
+        if safe.startswith("."):
             # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
             # deliberately rejected to prevent hidden or config files from
             # being persisted in SAMPLES_DIR.
