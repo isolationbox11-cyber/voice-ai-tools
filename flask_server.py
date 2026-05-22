@@ -482,11 +482,16 @@ def train():
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
         validated.append((f, safe))
+    base_dir = SAMPLES_DIR.resolve()
     for f, safe in validated:
-        dest = SAMPLES_DIR / safe
+        dest = (base_dir / safe).resolve()
+        try:
+            dest.relative_to(base_dir)
+        except ValueError:
+            return jsonify({"error": "Invalid filename"}), 400
         f.save(dest)
         saved.append(safe)
-        saved_paths.append(str(dest.resolve()))
+        saved_paths.append(str(dest))
     manifest = {
         "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
