@@ -77,22 +77,21 @@ def train_from_samples(sample_paths: list) -> str | None:
             continue
         if not candidate.name or candidate.name.startswith("."):
             print(f"Rejected invalid sample name: {candidate.name!r}")
-            print("Rejected file outside samples directory.")
-        if not candidate.exists() or not candidate.is_file():
-            print(f"Rejected missing sample file: {candidate}")
             continue
-            print("Rejected file with disallowed extension.")
+        trusted_src = candidate
+        if not trusted_src.exists() or not trusted_src.is_file():
+            print(f"Rejected missing sample file: {trusted_src}")
+            continue
         # Validate extension before touching the file
         if trusted_src.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {trusted_src.name}")
             continue
         if trusted_src.suffix.lower() == ".wav":
+            wav_paths.append(str(trusted_src))
+        else:
             # Use a server-generated destination filename to avoid deriving output
             # paths from user-controlled input names.
             wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
-        else:
-            # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = trusted_src.with_suffix(".wav").resolve()
             if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
                 print("Rejected conversion target outside samples directory.")
                 continue
