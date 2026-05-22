@@ -77,8 +77,12 @@ def train_from_samples(sample_paths: list) -> str | None:
         p = Path(path).resolve()
         # Guard: reject paths that escape the trusted samples root (prevents
         # directory traversal via user-controlled path components).
-        if not _is_within_root(p, _SAFE_SAMPLES_ROOT):
-            print(f"Rejected path outside samples directory: {Path(path).name!r}")
+        # Using relative_to() inline so that static-analysis tools can recognise
+        # this as a path-containment guard.
+        try:
+            p.relative_to(_SAFE_SAMPLES_ROOT)
+        except ValueError:
+            print(f"Rejected path outside samples directory: {p!r}")
             continue
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
@@ -88,11 +92,8 @@ def train_from_samples(sample_paths: list) -> str | None:
             wav_paths.append(str(p))
         else:
             # Use a server-generated name so the output path is never derived
-            # from user-controlled input; also verify it stays within the root.
+            # from user-controlled input.
             wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
-            if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
-                print("Rejected conversion target outside samples directory.")
-                continue
             if _convert_to_wav(p, wav_path):
                 wav_paths.append(str(wav_path))
             else:
