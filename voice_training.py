@@ -10,14 +10,9 @@ _SAFE_SAMPLES_ROOT = Path("voice_samples").resolve()
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """Return True if path resolves inside root (guard against path traversal).
-
-    ``root`` must already be fully resolved before calling this function.
-    Only ``path`` is resolved here to follow symlinks; ``root`` is used as-is
-    so that CodeQL does not see an additional path expression on user-derived data.
-    """
+    """Return True if an already-resolved path is inside an already-resolved root."""
     try:
-        path.resolve().relative_to(root)
+        path.relative_to(root)
         return True
     except ValueError:
         return False
@@ -77,18 +72,18 @@ def train_from_samples(sample_paths: list) -> str | None:
     wav_paths = []
     for path in sample_paths:
         raw_path = str(path)
-        candidate = Path(raw_path)
-        if candidate.is_absolute() or candidate != Path(candidate.name):
+        raw_candidate = Path(raw_path)
+        sample_name = raw_candidate.name
+        if raw_candidate.is_absolute() or raw_path != sample_name:
             print(f"Rejected non-basename sample path: {raw_path!r}")
             continue
-        try:
-            trusted_src = (_SAFE_SAMPLES_ROOT / candidate.name).resolve()
-        except OSError:
-            print(f"Rejected unreadable sample path: {raw_path!r}")
-            continue
-        sample_name = trusted_src.name
         if not sample_name or sample_name.startswith("."):
             print("Rejected invalid sample name.")
+            continue
+        try:
+            trusted_src = (_SAFE_SAMPLES_ROOT / sample_name).resolve()
+        except OSError:
+            print(f"Rejected unreadable sample path: {raw_path!r}")
             continue
         if not _is_within_root(trusted_src, _SAFE_SAMPLES_ROOT):
             print("Rejected file outside samples directory.")
