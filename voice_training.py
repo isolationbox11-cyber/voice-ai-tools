@@ -74,15 +74,22 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        p = Path(path).resolve()
-        # Guard: reject paths that escape the trusted samples root (prevents
-        # directory traversal via user-controlled path components).
-        # Using relative_to() inline so that static-analysis tools can recognise
-        # this as a path-containment guard.
+        # Accept only the bare filename to prevent directory traversal; any
+        # directory components supplied by the caller are intentionally dropped.
+        fname = Path(path).name
+        if not fname or fname.startswith("."):
+            print(f"Rejected invalid sample name: {fname!r}")
+            continue
+        # Reconstruct the full path from the trusted root and guard against
+        # symlink escapes with resolve() + relative_to().
+        p = (_SAFE_SAMPLES_ROOT / fname).resolve()
         try:
             p.relative_to(_SAFE_SAMPLES_ROOT)
-        except ValueError:
-            print(f"Rejected path outside samples directory: {p!r}")
+        except (ValueError, OSError):
+            print(f"Rejected path outside samples directory: {fname!r}")
+            continue
+        if not p.exists() or not p.is_file():
+            print(f"Sample not found in trusted root: {fname!r}")
             continue
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
