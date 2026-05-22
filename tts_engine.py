@@ -179,6 +179,10 @@ def synthesize_speech(
         audio_bytes: bytes = part.inline_data.data
         mime_type: str = part.inline_data.mime_type or "audio/wav"
 
+        logger.info(
+            f"TTS audio generated: {len(audio_bytes)} bytes, mime type: {mime_type}"
+        )
+
         if debug_output_path:
             with open(debug_output_path, "wb") as fh:
                 fh.write(audio_bytes)
