@@ -72,16 +72,8 @@ def train_from_samples(sample_paths: list) -> str | None:
     wav_paths = []
     for path in sample_paths:
         raw_path = str(path)
-        raw_candidate = Path(raw_path)
-        sample_name = raw_candidate.name
-        if raw_candidate.is_absolute() or raw_path != sample_name:
-            print(f"Rejected non-basename sample path: {raw_path!r}")
-            continue
-        if not sample_name or sample_name.startswith("."):
-            print("Rejected invalid sample name.")
-            continue
         try:
-            trusted_src = (_SAFE_SAMPLES_ROOT / sample_name).resolve()
+            trusted_src = Path(raw_path).resolve()
         except OSError:
             print(f"Rejected unreadable sample path: {raw_path!r}")
             continue
