@@ -71,14 +71,19 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        raw_path = str(path)
-        try:
-            trusted_src = Path(raw_path).resolve()
-        except OSError:
-            print(f"Rejected unreadable sample path: {raw_path!r}")
+        # Extract the basename from whatever the caller provides (absolute paths
+        # like those from flask_server.py are accepted; directory components are
+        # discarded so only the filename is used in path construction).
+        candidate_name = Path(str(path)).name
+        if not candidate_name or candidate_name.startswith("."):
+            print(f"Rejected invalid sample name: {candidate_name!r}")
             continue
-        if not _is_within_root(trusted_src, _SAFE_SAMPLES_ROOT):
-            print("Rejected file outside samples directory.")
+        # Construct from the trusted root and immediately guard against symlink escape.
+        try:
+            trusted_src = (_SAFE_SAMPLES_ROOT / candidate_name).resolve()
+            trusted_src.relative_to(_SAFE_SAMPLES_ROOT)  # raises ValueError if symlink escapes root
+        except (ValueError, OSError):
+            print(f"Rejected path outside samples directory: {candidate_name!r}")
             continue
         if not trusted_src.exists() or not trusted_src.is_file():
             print("Rejected missing sample file.")
