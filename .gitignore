@@ -1,6 +1,7 @@
 # Generated / user-specific files
 custom_voice_config.py
 voice_samples/
+voice_embeddings/
 voice_detection_log.json
 
 # Python

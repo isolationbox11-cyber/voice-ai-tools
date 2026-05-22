@@ -83,6 +83,8 @@ SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
 
 _GEMINI_DEFAULT_VOICE = "Kore"
+# Strict allowlist: first char alphanumeric, rest alphanumeric + . _ -, max 128 chars
+_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 flask_env = os.environ.get("FLASK_ENV", "").strip().lower()
 if not VOICE_SERVER_TOKEN:
@@ -468,23 +470,38 @@ def train():
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
     saved = []
+    saved_paths = []
     validated = []
     for f in files:
-        fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r'[^\w.\-]', '_', fname)
-        safe = Path(safe).name
-        if not safe or safe.startswith("."):
-            # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
-            # deliberately rejected to prevent hidden or config files from
-            # being persisted in SAMPLES_DIR.
+        fname = (f.filename or "").strip()
+        if not fname:
             return jsonify({"error": "Invalid filename"}), 400
+
+        # Reject path-like names (containing directory separators or absolute paths)
+        if fname != Path(fname).name:
+            return jsonify({"error": "Invalid filename"}), 400
+
+        # Strict allowlist: first char alphanumeric, rest alphanumeric + . _ -, max 128 chars
+        if not _FILENAME_RE.fullmatch(fname):
+            return jsonify({"error": "Invalid filename"}), 400
+
+        # Reject dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav)
+        if fname.startswith("."):
+            return jsonify({"error": "Invalid filename"}), 400
+
+        dest = (SAMPLES_DIR / fname).resolve()
+        try:
+            dest.relative_to(SAMPLES_DIR.resolve())
+        except ValueError:
+            return jsonify({"error": "Invalid filename"}), 400
+
         if not _is_audio_upload(f):
-            return jsonify({"error": f"Invalid audio file: {safe}"}), 400
-        validated.append((f, safe))
-    for f, safe in validated:
-        dest = SAMPLES_DIR / safe
+            return jsonify({"error": f"Invalid audio file: {fname}"}), 400
+        validated.append((f, fname, dest))
+    for f, fname, dest in validated:
         f.save(dest)
-        saved.append(safe)
+        saved.append(fname)
+        saved_paths.append(str(dest))
     manifest = {
         "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
@@ -496,7 +513,7 @@ def train():
     voice_id = None
     try:
         from voice_training import train_from_samples
-        voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
+        voice_id = train_from_samples(saved_paths)
         manifest["status"] = "trained" if voice_id else "samples_saved"
         if voice_id:
             manifest["voice_id"] = voice_id
