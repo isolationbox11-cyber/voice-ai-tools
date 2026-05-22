@@ -72,23 +72,28 @@ def train_from_samples(sample_paths: list) -> str | None:
     if not sample_paths:
         return None
 
+    # Build a map of filename → fully-resolved trusted path for every real
+    # file currently in the samples root.  Using iterdir() means that no path
+    # used in later file operations is derived from user-controlled data.
+    trusted_files: dict[str, Path] = {}
+    if _SAFE_SAMPLES_ROOT.is_dir():
+        for entry in _SAFE_SAMPLES_ROOT.iterdir():
+            resolved = entry.resolve()
+            if _is_within_root(resolved, _SAFE_SAMPLES_ROOT) and resolved.is_file():
+                trusted_files[entry.name] = resolved
+
     wav_paths = []
     for path in sample_paths:
-        # Accept only the bare filename to prevent directory traversal; any
-        # directory components supplied by the caller are intentionally dropped.
+        # Accept only the bare filename; discard any directory components from
+        # the caller's value to prevent directory-traversal attempts.
         fname = Path(path).name
         if not fname or fname.startswith("."):
             print(f"Rejected invalid sample name: {fname!r}")
             continue
-        # Reconstruct the full path from the trusted root and guard against
-        # symlink escapes with resolve() + relative_to().
-        p = (_SAFE_SAMPLES_ROOT / fname).resolve()
-        try:
-            p.relative_to(_SAFE_SAMPLES_ROOT)
-        except (ValueError, OSError):
-            print(f"Rejected path outside samples directory: {fname!r}")
-            continue
-        if not p.exists() or not p.is_file():
+        # Look up the file in the trusted directory listing.  The path used for
+        # every subsequent file operation comes from iterdir(), not user input.
+        p = trusted_files.get(fname)
+        if p is None:
             print(f"Sample not found in trusted root: {fname!r}")
             continue
         # Validate extension before touching the file
