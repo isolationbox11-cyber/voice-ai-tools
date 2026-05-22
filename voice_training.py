@@ -1,10 +1,24 @@
 import os
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
+
+# Trusted root for all training-sample files.  Paths that resolve outside
+# this directory are rejected before any file operation is performed.
+_SAFE_SAMPLES_ROOT = Path("voice_samples").resolve()
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    """Return True if an already-resolved *path* is inside an already-resolved *root*."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 # ── Coqui XTTS v2 lazy loader ───────────────────────────────────────
 _tts_model = None
@@ -60,7 +74,12 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     wav_paths = []
     for path in sample_paths:
-        p = Path(path)
+        p = Path(path).resolve()
+        # Guard: reject paths that escape the trusted samples root (prevents
+        # directory traversal via user-controlled path components).
+        if not _is_within_root(p, _SAFE_SAMPLES_ROOT):
+            print(f"Rejected path outside samples directory: {Path(path).name!r}")
+            continue
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {p.name}")
@@ -68,8 +87,12 @@ def train_from_samples(sample_paths: list) -> str | None:
         if p.suffix.lower() == ".wav":
             wav_paths.append(str(p))
         else:
-            # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = p.with_suffix(".wav")
+            # Use a server-generated name so the output path is never derived
+            # from user-controlled input; also verify it stays within the root.
+            wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
+            if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
+                print("Rejected conversion target outside samples directory.")
+                continue
             if _convert_to_wav(p, wav_path):
                 wav_paths.append(str(wav_path))
             else:
