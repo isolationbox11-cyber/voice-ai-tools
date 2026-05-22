@@ -36,7 +36,8 @@ jobs:
 
       - name: Install Playwright + Chromium
         run: |
-          npm install --no-save playwright
+          if [ ! -f package.json ]; then npm init -y; fi
+          npm install playwright@latest
           npx playwright install chromium --with-deps
 
       # ── 4. Start Flask server in background ───────────────────────
