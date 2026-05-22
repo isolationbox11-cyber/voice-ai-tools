@@ -88,7 +88,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             # Convert to wav using subprocess list-form (no shell injection possible)
             wav_path = trusted_src.with_suffix(".wav").resolve()
             if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
-                print(f"Rejected conversion target outside samples directory: {wav_path}")
+                print("Rejected conversion target outside samples directory.")
                 continue
             if _convert_to_wav(trusted_src, wav_path):
                 wav_paths.append(str(wav_path))
