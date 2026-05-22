@@ -86,7 +86,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             print("Rejected invalid sample name.")
             continue
         if not _is_within_root(trusted_src, _SAFE_SAMPLES_ROOT):
-            print(f"Rejected file outside samples directory: {trusted_src}")
+            print("Rejected file outside samples directory.")
             continue
         if not trusted_src.exists() or not trusted_src.is_file():
             print("Rejected missing sample file.")
