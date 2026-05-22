@@ -78,9 +78,9 @@ class TestTrainFromSamples:
 
     def test_rejects_disallowed_extension(self, tmp_path, monkeypatch):
         monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", tmp_path.resolve())
-        bad = tmp_path / "clip.exe"
-        bad.write_bytes(b"MZ")
-        result = voice_training.train_from_samples([str(bad)])
+        disallowed_file = tmp_path / "clip.exe"
+        disallowed_file.write_bytes(b"MZ")
+        result = voice_training.train_from_samples([str(disallowed_file)])
         assert result is None
 
     def test_rejects_path_traversal(self, tmp_path, monkeypatch):
