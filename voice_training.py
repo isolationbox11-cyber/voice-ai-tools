@@ -86,7 +86,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             continue
         trusted_src = candidate
         if not trusted_src.exists() or not trusted_src.is_file():
-            print(f"Rejected missing sample file: {trusted_src.name}")
+            print("Rejected missing sample file.")
             continue
         # Validate extension before touching the file
         if trusted_src.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
