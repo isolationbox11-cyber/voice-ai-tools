@@ -468,6 +468,7 @@ def train():
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
     saved = []
+    saved_paths = []
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
@@ -485,6 +486,7 @@ def train():
         dest = SAMPLES_DIR / safe
         f.save(dest)
         saved.append(safe)
+        saved_paths.append(str(dest.resolve()))
     manifest = {
         "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
@@ -496,7 +498,7 @@ def train():
     voice_id = None
     try:
         from voice_training import train_from_samples
-        voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
+        voice_id = train_from_samples(saved_paths)
         manifest["status"] = "trained" if voice_id else "samples_saved"
         if voice_id:
             manifest["voice_id"] = voice_id
