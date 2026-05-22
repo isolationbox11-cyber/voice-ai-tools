@@ -70,23 +70,39 @@ def train_from_samples(sample_paths: list) -> str | None:
         return None
 
     wav_paths = []
+    # Build an index of files present in the safe samples root so that the
+    # trusted path comes from the filesystem (via iterdir) rather than from
+    # user-provided data.  This breaks the CodeQL taint chain: candidate_name
+    # is used only as a dict key for lookup, not in any path construction.
+    try:
+        samples_index = {
+            f.name: f
+            for f in _SAFE_SAMPLES_ROOT.iterdir()
+            if f.is_file() and not f.name.startswith(".")
+        }
+    except OSError:
+        print("Could not read samples directory.")
+        return None
+
     for path in sample_paths:
         # Extract the basename from whatever the caller provides (absolute paths
         # like those from flask_server.py are accepted; directory components are
-        # discarded so only the filename is used in path construction).
+        # discarded so only the filename is used for lookup).
         candidate_name = Path(str(path)).name
         if not candidate_name or candidate_name.startswith("."):
             print(f"Rejected invalid sample name: {candidate_name!r}")
             continue
-        # Construct from the trusted root and immediately guard against symlink escape.
+        # Look up the file by name from the filesystem index (path is server-derived).
+        trusted_src = samples_index.get(candidate_name)
+        if trusted_src is None:
+            print(f"Rejected missing sample file: {candidate_name!r}")
+            continue
+        # Guard against symlink-based escape (trusted_src comes from iterdir but
+        # may be a symlink).
         try:
-            trusted_src = (_SAFE_SAMPLES_ROOT / candidate_name).resolve()
-            trusted_src.relative_to(_SAFE_SAMPLES_ROOT)  # raises ValueError if symlink escapes root
+            trusted_src.resolve().relative_to(_SAFE_SAMPLES_ROOT)
         except (ValueError, OSError):
             print(f"Rejected path outside samples directory: {candidate_name!r}")
-            continue
-        if not trusted_src.exists() or not trusted_src.is_file():
-            print("Rejected missing sample file.")
             continue
         # Validate extension before touching the file
         if trusted_src.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
