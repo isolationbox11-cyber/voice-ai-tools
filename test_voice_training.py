@@ -93,6 +93,16 @@ class TestTrainFromSamples:
         result = voice_training.train_from_samples([str(outside_wav)])
         assert result is None
 
+    def test_rejects_relative_traversal(self, tmp_path, monkeypatch):
+        """Relative traversal strings (../../etc) must be rejected, not resolved."""
+        trusted_root = tmp_path / "samples"
+        trusted_root.mkdir()
+        monkeypatch.setattr(voice_training, "_SAFE_SAMPLES_ROOT", trusted_root.resolve())
+        # A path designed to escape the root via relative traversal.
+        traversal_path = "../../etc/passwd"
+        result = voice_training.train_from_samples([traversal_path])
+        assert result is None
+
     def test_fallback_writes_voice_config(self, tmp_path, monkeypatch):
         """When Coqui is unavailable, _write_voice_config must still be called."""
         wav = _make_wav(tmp_path)
