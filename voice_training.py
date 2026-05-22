@@ -73,18 +73,18 @@ def train_from_samples(sample_paths: list) -> str | None:
     for path in sample_paths:
         raw_path = str(path)
         input_path = Path(raw_path)
-        sample_name = input_path.name
-        if raw_path != sample_name:
-            print(f"Rejected non-filename sample path: {raw_path!r}")
+        try:
+            trusted_src = input_path.resolve()
+        except OSError:
+            print(f"Rejected unreadable sample path: {raw_path!r}")
             continue
+        sample_name = trusted_src.name
         if not sample_name or sample_name.startswith("."):
             print(f"Rejected invalid sample name: {sample_name!r}")
             continue
-        candidate = (_SAFE_SAMPLES_ROOT / sample_name).resolve()
-        if not _is_within_root(candidate, _SAFE_SAMPLES_ROOT):
-            print(f"Rejected file outside samples directory: {candidate}")
+        if not _is_within_root(trusted_src, _SAFE_SAMPLES_ROOT):
+            print(f"Rejected file outside samples directory: {trusted_src}")
             continue
-        trusted_src = candidate
         if not trusted_src.exists() or not trusted_src.is_file():
             print("Rejected missing sample file.")
             continue
