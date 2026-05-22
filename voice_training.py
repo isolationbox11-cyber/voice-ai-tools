@@ -6,22 +6,21 @@ from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
-_SAFE_SAMPLES_ROOT = Path("samples").resolve()
+_SAFE_SAMPLES_ROOT = Path("voice_samples").resolve()
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """
-    Determine whether a path is located inside a given root directory after resolving it.
-    
+    """Check whether an already-resolved path is contained by an already-resolved root.
+
     Parameters:
-        path (Path): The candidate path to check; it will be resolved before comparison.
-        root (Path): The root directory; it will be resolved before comparison.
-    
+        path (Path): Candidate path to validate.
+        root (Path): Allowed root directory.
+
     Returns:
-        bool: `True` if the resolved `path` is a child of the resolved `root`, `False` otherwise.
+        bool: True when `path` is inside `root`; otherwise False.
     """
     try:
-        path.resolve().relative_to(root.resolve())
+        path.relative_to(root)
         return True
     except ValueError:
         return False
@@ -58,7 +57,7 @@ def _convert_to_wav(src: Path, dst: Path) -> bool:
         )
         return result.returncode == 0 and dst.exists()
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-        print(f"ffmpeg error for {src}: {e}")
+        print(f"ffmpeg error: {e}")
         return False
 
 
@@ -80,29 +79,50 @@ def train_from_samples(sample_paths: list) -> str | None:
         return None
 
     wav_paths = []
+    # Build an index of files present in the safe samples root so that the
+    # trusted path comes from the filesystem (via iterdir) rather than from
+    # user-provided data.  This breaks the CodeQL taint chain: candidate_name
+    # is used only as a dict key for lookup, not in any path construction.
+    try:
+        samples_index = {
+            f.name: f
+            for f in _SAFE_SAMPLES_ROOT.iterdir()
+            if f.is_file() and not f.name.startswith(".")
+        }
+    except OSError:
+        print("Could not read samples directory.")
+        return None
+
     for path in sample_paths:
-        candidate = Path(str(path)).resolve()
-        if not _is_within_root(candidate, _SAFE_SAMPLES_ROOT):
-            print(f"Rejected file outside samples directory: {candidate}")
+        # Extract the basename from whatever the caller provides (absolute paths
+        # like those from flask_server.py are accepted; directory components are
+        # discarded so only the filename is used for lookup).
+        candidate_name = Path(str(path)).name
+        if not candidate_name or candidate_name.startswith("."):
+            print(f"Rejected invalid sample name: {candidate_name!r}")
             continue
-        if not candidate.name or candidate.name.startswith("."):
-            print(f"Rejected invalid sample name: {candidate.name!r}")
-            print("Rejected file outside samples directory.")
-        if not candidate.exists() or not candidate.is_file():
-            print(f"Rejected missing sample file: {candidate}")
+        # Look up the file by name from the filesystem index (path is server-derived).
+        trusted_src = samples_index.get(candidate_name)
+        if trusted_src is None:
+            print(f"Rejected missing sample file: {candidate_name!r}")
             continue
-            print("Rejected file with disallowed extension.")
+        # Guard against symlink-based escape (trusted_src comes from iterdir but
+        # may be a symlink).
+        try:
+            trusted_src.resolve().relative_to(_SAFE_SAMPLES_ROOT)
+        except (ValueError, OSError):
+            print(f"Rejected path outside samples directory: {candidate_name!r}")
+            continue
         # Validate extension before touching the file
         if trusted_src.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {trusted_src.name}")
             continue
         if trusted_src.suffix.lower() == ".wav":
+            wav_paths.append(str(trusted_src))
+        else:
             # Use a server-generated destination filename to avoid deriving output
             # paths from user-controlled input names.
             wav_path = (_SAFE_SAMPLES_ROOT / f"converted_{uuid.uuid4().hex}.wav").resolve()
-        else:
-            # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = trusted_src.with_suffix(".wav").resolve()
             if not _is_within_root(wav_path, _SAFE_SAMPLES_ROOT):
                 print("Rejected conversion target outside samples directory.")
                 continue
@@ -123,11 +143,16 @@ def train_from_samples(sample_paths: list) -> str | None:
 
     # Load the model and compute speaker embedding from all clips
     model = _get_coqui_model()
+    # Store only filenames (not absolute paths) in the JSON metadata so server-internal
+    # paths are not persisted.  The absolute paths in wav_paths are still used in-memory
+    # for the Coqui model call and are stored separately by _write_voice_config for
+    # tts_engine to use.
+    sample_filenames = [Path(p).name for p in wav_paths]
     if model is None:
         import json
         embedding_path.write_text(json.dumps({
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "fallback"
         }))
         _write_voice_config(voice_id, wav_paths, engine="fallback")
@@ -142,7 +167,7 @@ def train_from_samples(sample_paths: list) -> str | None:
         import torch
         embedding_data = {
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "coqui_xtts_v2",
             "gpt_cond_latent": gpt_cond_latent.cpu().tolist(),
             "speaker_embedding": speaker_embedding.cpu().tolist(),
@@ -156,7 +181,7 @@ def train_from_samples(sample_paths: list) -> str | None:
         import json
         embedding_path.write_text(json.dumps({
             "voice_id": voice_id,
-            "sample_paths": wav_paths,
+            "sample_paths": sample_filenames,
             "engine": "fallback"
         }))
         _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
