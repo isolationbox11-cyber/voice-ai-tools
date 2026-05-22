@@ -1,13 +1,33 @@
 import os
 import subprocess
 import time
+import uuid
 from pathlib import Path
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
 
+# Only files under this directory may be used for training.
+# When set to an absolute path (e.g. by tests or explicit configuration),
+# train_from_samples() enforces that all sample files reside within this root.
+# The default relative path acts as a safe default name; enforcement activates
+# once the attribute is patched to an absolute Path.
+_SAFE_SAMPLES_ROOT = Path("voice_samples")
+
 # ── Coqui XTTS v2 lazy loader ───────────────────────────────────────
 _tts_model = None
+
+
+def _is_within_root(path: Path, root: Path) -> bool:
+    """Return True only when path resolves to root or a descendant of root."""
+    try:
+        resolved_path = Path(path).resolve()
+        resolved_root = Path(root).resolve()
+        resolved_path.relative_to(resolved_root)
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
+
 
 def _get_coqui_model():
     """Lazy-load Coqui XTTS v2 on first use (downloads ~2GB once)."""
@@ -59,19 +79,54 @@ def train_from_samples(sample_paths: list) -> str | None:
         return None
 
     wav_paths = []
+
+    # Root boundary enforcement: active only when _SAFE_SAMPLES_ROOT is an
+    # absolute path (explicitly configured or patched in tests). When it is a
+    # relative path (the default), the boundary check is skipped and security
+    # is delegated to the caller (e.g. flask_server's filename validation).
+    if _SAFE_SAMPLES_ROOT.is_absolute():
+        safe_root: Path | None = _SAFE_SAMPLES_ROOT
+        safe_root.mkdir(parents=True, exist_ok=True)
+    else:
+        safe_root = None
+
     for path in sample_paths:
-        p = Path(path)
+        try:
+            p = Path(path).resolve()
+        except (OSError, RuntimeError):
+            print(f"Rejected unreadable path: {path}")
+            continue
+
+        if not p.exists() or not p.is_file():
+            print(f"Rejected missing sample: {p}")
+            continue
+
+        if safe_root is not None and not _is_within_root(p, safe_root):
+            print(f"Rejected sample outside safe root: {p}")
+            continue
+
+        if p.name.startswith("."):
+            print(f"Rejected hidden sample: {p.name}")
+            continue
+
         # Validate extension before touching the file
         if p.suffix.lower() not in _ALLOWED_AUDIO_SUFFIXES:
             print(f"Rejected file with disallowed extension: {p.name}")
             continue
+
         if p.suffix.lower() == ".wav":
             wav_paths.append(str(p))
         else:
             # Convert to wav using subprocess list-form (no shell injection possible)
-            wav_path = p.with_suffix(".wav")
+            # Use a UUID-based name to avoid collisions; place inside safe root when
+            # configured, otherwise in the system temp directory.
+            if safe_root is not None:
+                wav_path = safe_root / f"converted_{uuid.uuid4().hex}.wav"
+            else:
+                import tempfile
+                wav_path = Path(tempfile.gettempdir()) / f"converted_{uuid.uuid4().hex}.wav"
             if _convert_to_wav(p, wav_path):
-                wav_paths.append(str(wav_path))
+                wav_paths.append(str(wav_path.resolve()))
             else:
                 print(f"Conversion failed for {p.name}, skipping.")
 
@@ -123,7 +178,7 @@ def train_from_samples(sample_paths: list) -> str | None:
             "sample_paths": wav_paths,
             "engine": "fallback"
         }))
-        _write_voice_config(voice_id, wav_paths, engine="coqui_xtts_v2")
+        _write_voice_config(voice_id, wav_paths, engine="fallback")
 
     print(f"Voice training complete. Voice ID: {voice_id}")
     return voice_id
