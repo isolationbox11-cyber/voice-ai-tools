@@ -10,7 +10,16 @@ _SAFE_SAMPLES_ROOT = Path("samples").resolve()
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
-    """Return True if path resolves inside root."""
+    """
+    Determine whether a path is located inside a given root directory after resolving it.
+    
+    Parameters:
+        path (Path): The candidate path to check; it will be resolved before comparison.
+        root (Path): The root directory; it will be resolved before comparison.
+    
+    Returns:
+        bool: `True` if the resolved `path` is a child of the resolved `root`, `False` otherwise.
+    """
     try:
         path.resolve().relative_to(root.resolve())
         return True
@@ -58,13 +67,14 @@ def _convert_to_wav(src: Path, dst: Path) -> bool:
 # Takes the recorded audio clips and trains a real Coqui XTTS v2
 # speaker embedding. No API key required — runs 100% locally.
 def train_from_samples(sample_paths: list) -> str | None:
-    """Train a Coqui XTTS v2 speaker embedding from recorded clips.
-
-    Args:
-        sample_paths: List of .webm/.wav file paths from the recorder.
-
+    """
+    Create or extract a speaker embedding from recorder clips and register a local cloned voice.
+    
+    Parameters:
+        sample_paths (list): Iterable of input audio file paths to use as training samples. Each path must resolve inside the repository's `samples/` directory and have one of the allowed extensions: `.webm`, `.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`.
+    
     Returns:
-        voice_id string on success, or None on failure.
+        str | None: The generated `voice_id` on success, or `None` if no usable samples were provided or embedding/synthesis could not be produced.
     """
     if not sample_paths:
         return None
