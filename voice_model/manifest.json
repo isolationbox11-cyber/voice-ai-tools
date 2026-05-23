@@ -1,0 +1,13 @@
+{
+  "samples": [
+    "take_0_calm.webm",
+    "take_1_rant.webm",
+    "take_2_curious.webm",
+    "take_3_singing.webm"
+  ],
+  "sample_dir": "voice_samples",
+  "trained_at": "2026-05-22T21:37:40Z",
+  "count": 4,
+  "status": "samples_saved",
+  "note": "voice_training.py not installed \u2014 samples saved only"
+}
