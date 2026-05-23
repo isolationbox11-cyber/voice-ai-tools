@@ -3,7 +3,7 @@
   "name": "Voice AI TTS",
   "version": "1.0.0",
   "description": "Browser TTS playback for voice-ai-tools via local Flask server.",
-  "permissions": ["storage", "offscreen", "microphone"],
+  "permissions": ["storage", "offscreen"],
   "host_permissions": ["http://127.0.0.1:5100/*", "http://localhost:5100/*"],
   "action": {
     "default_popup": "popup.html",
