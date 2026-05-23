@@ -19,7 +19,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(() => {
         chrome.runtime.sendMessage({
           type: "PLAY_AUDIO_OFFSCREEN",
-          audioUrl: message.audioUrl,
+            audioData: message.audioData,
+            mimeType: message.mimeType
         });
         sendResponse({ ok: true });
       })

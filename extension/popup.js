@@ -1,12 +1,15 @@
 /* popup.js - Voice AI Tools v3.0 - karaoke train UI, no emoji */
 
-const DEFAULT_SERVER = 'http://127.0.0.1:5000';
-let serverUrl = DEFAULT_SERVER, token = '', logs = [];
+const DEFAULT_SERVER = 'http://127.0.0.1:5100';
+const DEFAULT_TOKEN = 'voice_ai_tools_secret_2026';
+let serverUrl = DEFAULT_SERVER, token = DEFAULT_TOKEN, logs = [];
+let customVoiceId = 'cloned';
 let mediaRecorder = null, recordedChunks = [], isRecording = false;
 let trainClips = [null, null, null, null];
 let currentTake = 0;
 let timerInterval = null;
 let useClonedVoice = true;
+let audioProcessorWASM = null;
 
 // -- karaoke presets
 const PRESETS = [
@@ -62,6 +65,16 @@ const PRESETS = [
   }
 ];
 
+// -- random tts phrases
+const RANDOM_PHRASES = [
+  "Hello! This is a test of the Voice AI text to speech system.",
+  "Could you please repeat that? I didn't quite catch what you said.",
+  "The quick brown fox jumps over the lazy dog.",
+  "It's a beautiful day outside, don't you think?",
+  "I wonder what would happen if we looked at this from a completely different angle?",
+  "I am speaking to you live from the browser extension."
+];
+
 // -- storage wrapper
 const store = {
   get(keys, cb) {
@@ -98,12 +111,41 @@ document.addEventListener('DOMContentLoaded', async () => {
   checkConnection();
 });
 
+// -- global extension message listener
+chrome.runtime.onMessage.addListener((message) => {
+  const statusEl = document.getElementById('voice-status');
+  if (!statusEl) return;
+
+  if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {
+    if (statusEl.textContent === 'Playing in background...') {
+      statusEl.textContent = 'Done';
+    }
+  } else if (message.type === 'AUDIO_PLAYBACK_ERROR') {
+    statusEl.textContent = 'Playback error: ' + (message.error || 'Unknown');
+  }
+});
+
 async function loadSettings() {
-  return new Promise(r => store.get(['serverUrl', 'token'], res => {
+  return new Promise(r => store.get(['serverUrl', 'token', 'customVoiceId'], res => {
     serverUrl = res.serverUrl || DEFAULT_SERVER;
-    token = res.token || '';
+    token = res.token || DEFAULT_TOKEN;
+    if (res.customVoiceId) customVoiceId = res.customVoiceId;
     r();
   }));
+}
+
+// -- audio processor initialization
+async function initAudioProcessor() {
+  try {
+    // Try to load the Rust WASM audio processor
+    const AudioProcessorWASM = await import('./audio_processor_wasm.js');
+    audioProcessorWASM = new AudioProcessorWASM.AudioProcessorWASM(44100);
+    await audioProcessorWASM.init();
+    console.log('✅ Rust audio processor loaded successfully');
+  } catch (error) {
+    console.log('📝 Rust audio processor not available, using JavaScript fallback');
+    audioProcessorWASM = null;
+  }
 }
 
 // -- tabs
@@ -123,6 +165,7 @@ function initVoice() {
   const speakBtn = document.getElementById('btn-speak');
   const clearBtn = document.getElementById('btn-clear-voice');
   const compareBtn = document.getElementById('btn-compare');
+  const randomBtn = document.getElementById('btn-random-phrase');
   const clonedBtn = document.getElementById('btn-mode-cloned');
   const stockBtn = document.getElementById('btn-mode-stock');
   const statusEl = document.getElementById('voice-status');
@@ -146,6 +189,11 @@ function initVoice() {
     if (txt) txt.value = '';
   });
 
+  if (randomBtn) randomBtn.addEventListener('click', () => {
+    const txt = document.getElementById('tts-text');
+    if (txt) txt.value = RANDOM_PHRASES[Math.floor(Math.random() * RANDOM_PHRASES.length)];
+  });
+
   if (speakBtn) speakBtn.addEventListener('click', () => speakText(useClonedVoice, false));
 
   if (compareBtn) compareBtn.addEventListener('click', async () => {
@@ -160,6 +208,12 @@ function initVoice() {
       if (statusEl) statusEl.textContent = 'AB compare done.';
     }, 2500);
   });
+
+  // Automatically populate the TTS text box with a preset phrase
+  const txt = document.getElementById('tts-text');
+  if (txt && !txt.value.trim()) {
+    txt.value = "Hello! This is a test of the Voice AI text to speech system.";
+  }
 }
 
 async function speakText(cloned, silent) {
@@ -175,7 +229,7 @@ async function speakText(cloned, silent) {
     const r = await fetch(serverUrl + '/tts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Token': token },
-      body: JSON.stringify({ text, voice_id: cloned ? 'cloned' : 'kore', speed: speed ? speed.value : 'normal' })
+      body: JSON.stringify({ text, voice_id: cloned ? customVoiceId : 'kore', speed: speed ? speed.value : 'normal' })
     });
     if (!r.ok) {
       const e = await r.json();
@@ -184,15 +238,27 @@ async function speakText(cloned, silent) {
       return;
     }
     const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.onended = () => { URL.revokeObjectURL(url); if (!silent && statusEl) statusEl.textContent = 'Done'; };
-    audio.onerror = () => { URL.revokeObjectURL(url); if (statusEl) statusEl.textContent = 'Playback error'; };
-    await audio.play();
-    addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
+    const buffer = await blob.arrayBuffer();
+
+    chrome.runtime.sendMessage({ type: 'PLAY_AUDIO', audioData: buffer, mimeType: blob.type }, (response) => {
+      if (response && response.ok) {
+        if (!silent && statusEl) statusEl.textContent = 'Playing in background...';
+        addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
+      } else if (statusEl) {
+        statusEl.textContent = 'Playback error: ' + (response ? response.error : 'Unknown');
+      }
+    });
   } catch (e) {
-    if (statusEl) statusEl.textContent = 'Error -- is Flask running?';
-    addLog('warn', 'Voice error: ' + e.message);
+    let errorMsg = 'TTS error: ';
+    if (e.name === 'TypeError' && e.message.includes('Failed to fetch')) {
+      errorMsg = 'Server unreachable. Is Flask running on port 5000?';
+    } else if (e.name === 'TypeError' && e.message.includes('NetworkError')) {
+      errorMsg = 'Network error. Check connection to Flask server.';
+    } else {
+      errorMsg = 'TTS request failed: ' + e.message;
+    }
+    if (statusEl) statusEl.textContent = errorMsg;
+    addLog('warn', 'Voice error: ' + errorMsg);
   }
   if (!silent && speakBtn) speakBtn.disabled = false;
 }
@@ -242,25 +308,7 @@ function initTrain() {
     if (status) status.textContent = 'Reset. Record all 4 takes again.';
   });
 
-  if (checkBtn) checkBtn.addEventListener('click', async () => {
-    const status = document.getElementById('train-status');
-    try {
-      const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Token': token } });
-      const d = await r.json();
-      const idEl = document.getElementById('trained-voice-id');
-      if (d.trained) {
-        if (status) status.textContent = 'Model: ' + (d.status || 'trained') + ' / ' + (d.count || '?') + ' clips / ' + (d.trained_at || '');
-        if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
-        if (d.error && status) status.textContent += ' -- ' + d.error;
-      } else {
-        if (status) status.textContent = 'No model trained yet.';
-        if (idEl) idEl.style.display = 'none';
-      }
-    } catch (e) {
-      const status = document.getElementById('train-status');
-      if (status) status.textContent = 'Could not reach server.';
-    }
-  });
+  if (checkBtn) checkBtn.addEventListener('click', () => checkModelStatus(false));
 }
 
 function renderKaraokeStep(step) {
@@ -278,9 +326,17 @@ function renderKaraokeStep(step) {
   if (hintEl) hintEl.textContent = p.hint;
 
   if (scriptEl) {
-    scriptEl.innerHTML = p.lines.map((line, i) =>
-      '<span class="kline" data-line="' + i + '">' + esc(line) + '</span>'
-    ).join('<br>');
+    scriptEl.innerHTML = '';
+    p.lines.forEach((line, i) => {
+      const span = document.createElement('span');
+      span.className = 'kline';
+      span.dataset.line = i;
+      span.textContent = line;
+      scriptEl.appendChild(span);
+      if (i < p.lines.length - 1) {
+        scriptEl.appendChild(document.createElement('br'));
+      }
+    });
   }
 
   if (recordLabel) {
@@ -296,8 +352,9 @@ function renderKaraokeStep(step) {
   });
 }
 
-function startRecording() {
-  navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     recordedChunks = [];
     mediaRecorder = new MediaRecorder(stream);
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
@@ -327,11 +384,37 @@ function startRecording() {
     if (label) label.textContent = 'Recording -- tap to stop';
     startTimer();
     highlightLines();
-  }).catch(e => {
+  } catch (e) {
     const status = document.getElementById('train-status');
-    if (status) status.textContent = 'Mic error: ' + e.message;
-    addLog('warn', 'Mic error: ' + e.message);
-  });
+
+    console.error('Microphone error details:', {
+      name: e?.name || 'Unknown',
+      message: e?.message || 'No message',
+      stack: e?.stack || 'No stack',
+      toString: String(e),
+      constructor: e?.constructor?.name,
+      isDOMException: e instanceof DOMException,
+      permissionsState: navigator.permissions ? 'available' : 'unavailable'
+    });
+
+    let errorMsg = `Mic error: ${e?.name || 'Unknown'} - ${e?.message || 'No message'}`;
+
+    if (e?.name === 'NotAllowedError' || String(e?.message).includes('Permission denied')) {
+      errorMsg = 'Microphone access is not granted yet. Opening permission page...';
+      if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+      }
+    } else if (e?.name === 'NotFoundError' || String(e?.message).includes('No device found')) {
+      errorMsg = 'No microphone found. Connect a microphone and try again.';
+    } else if (e?.name === 'NotReadableError') {
+      errorMsg = 'Microphone is busy or unavailable. Close other apps using it and try again.';
+    } else if (e?.name === 'SecurityError' || e?.name === 'DOMException') {
+      errorMsg = 'Chrome blocked microphone access in this context. Reload the extension and request permission again.';
+    }
+
+    if (status) status.textContent = errorMsg;
+    addLog('warn', errorMsg);
+  }
 }
 
 function stopRecording() {
@@ -398,6 +481,27 @@ function updateTrainBtn() {
   }
 }
 
+async function checkModelStatus(isAuto = false) {
+  const status = document.getElementById('model-status');
+  const idEl = document.getElementById('trained-voice-id');
+  try {
+    const r = await fetch(serverUrl + '/model_status', { headers: { 'X-Token': token } });
+    if (!r.ok) {
+      if (status) status.textContent = 'Error checking model';
+      return;
+    } else {
+      if (!isAuto && status) status.textContent = 'No model trained yet.';
+      if (idEl) idEl.style.display = 'none';
+
+      // Automatically switch to 'Stock' if no model exists to prevent unexpected fallbacks
+      const stockBtn = document.getElementById('btn-mode-stock');
+      if (stockBtn && isAuto) stockBtn.click();
+    }
+  } catch (e) {
+    if (!isAuto && status) status.textContent = 'Could not reach server.';
+  }
+}
+
 async function submitTraining() {
   const status = document.getElementById('train-status');
   const trainBtn = document.getElementById('btn-train');
@@ -415,7 +519,12 @@ async function submitTraining() {
       if (status) status.textContent = d.status === 'trained'
         ? 'Voice trained. ID: ' + (d.voice_id || 'saved')
         : (d.note || d.status || 'Samples saved.');
-      if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
+      if (idEl && d.voice_id) {
+        idEl.style.display = 'block';
+        idEl.textContent = 'Voice ID: ' + d.voice_id;
+        customVoiceId = d.voice_id;
+        store.set({ customVoiceId: d.voice_id });
+      }
       if (d.error && status) status.textContent += ' -- ' + d.error;
       addLog('train', 'Training result: ' + (d.status || 'ok') + ' / ' + (d.voice_id || ''));
     } else {
@@ -499,7 +608,9 @@ function initLog() {
 
 function addLog(type, message) {
   const e = { type, message, time: new Date().toLocaleTimeString() };
-  logs.unshift(e); if (logs.length > 200) logs.pop();
+  logs.unshift(e);
+  if (logs.length > 200) logs.pop();
+
   fetch(serverUrl + '/log', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Token': token }, body: JSON.stringify({ ...e, time: Date.now() }) }).catch(() => {});
   renderLog();
 }
@@ -507,9 +618,34 @@ function addLog(type, message) {
 function renderLog() {
   const list = document.getElementById('log-list');
   if (!list) return;
-  if (!logs.length) { list.innerHTML = '<div class="log-empty">No activity logged yet.</div>'; return; }
+  list.innerHTML = ''; // Safely clear contents
+  if (!logs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'log-empty';
+    empty.textContent = 'No activity logged yet.';
+    list.appendChild(empty);
+    return;
+  }
   const c = { voice: '#4CC9F0', train: '#06D6A0', track: '#7B2FBE', pdf: '#F72585', ok: '#06D6A0', warn: '#F72585', info: '#4CC9F0' };
-  list.innerHTML = logs.map(l => '<div class="log-item"><span class="log-type" style="color:' + (c[l.type] || '#e0e0e0') + '">[' + l.type.toUpperCase() + ']</span> <span class="log-time">' + l.time + '</span> ' + esc(l.message) + '</div>').join('');
+
+  const fragment = document.createDocumentFragment();
+  for (const l of logs) {
+    const item = document.createElement('div');
+    item.className = 'log-item';
+
+    const typeSpan = document.createElement('span');
+    typeSpan.className = 'log-type';
+    typeSpan.style.color = c[l.type] || '#e0e0e0';
+    typeSpan.textContent = `[${l.type.toUpperCase()}]`;
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'log-time';
+    timeSpan.textContent = l.time;
+
+    item.append(typeSpan, ' ', timeSpan, ' ', l.message);
+    fragment.appendChild(item);
+  }
+  list.appendChild(fragment);
 }
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -518,11 +654,48 @@ function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').
 async function checkConnection() {
   const el = document.getElementById('conn-status');
   try {
-    const r = await fetch(serverUrl + '/health', { headers: { 'X-Token': token } });
+    console.log('Checking connection to:', serverUrl + '/health');
+    const r = await fetch(serverUrl + '/health', {
+      headers: { 'X-Token': token },
+      mode: 'cors'
+    });
+    console.log('Connection response:', r.status, r.ok);
     if (el) el.style.color = r.ok ? '#06D6A0' : '#F72585';
-  } catch {
+    addLog('info', 'Server connection: ' + (r.ok ? 'OK' : 'Failed'));
+  } catch (e) {
+    console.log('Connection error:', e);
     if (el) el.style.color = '#888';
+    addLog('warn', 'Server connection failed: ' + e.message);
   }
+}
+
+async function checkMicPermission() {
+  const icon = document.getElementById('mic-status-icon');
+  if (!icon || !navigator.permissions) return;
+  try {
+    const result = await navigator.permissions.query({ name: 'microphone' });
+    const updateUI = (state) => {
+      if (state === 'granted') {
+        icon.style.filter = 'none';
+        icon.style.opacity = '1';
+        icon.style.color = 'var(--ok)';
+        icon.style.textShadow = '0 0 8px var(--ok)';
+        icon.title = 'Microphone: Access Granted';
+      } else if (state === 'denied') {
+        icon.style.filter = 'none';
+        icon.style.opacity = '1';
+        icon.style.color = 'var(--warn)';
+        icon.style.textShadow = '0 0 8px var(--warn)';
+        icon.title = 'Microphone: Access Denied';
+      } else {
+        icon.style.filter = 'grayscale(1)';
+        icon.style.opacity = '0.4';
+        icon.title = 'Microphone: Permission Required';
+      }
+    };
+    updateUI(result.state);
+    result.onchange = () => updateUI(result.state);
+  } catch (e) { console.warn('Permissions API error:', e); }
 }
 
 // -- visualizer

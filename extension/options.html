@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Microphone Setup - Voice AI Tools</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        background:
+          radial-gradient(
+            ellipse at 50% 30%,
+            rgba(15, 61, 62, 0.5) 0%,
+            transparent 70%
+          ),
+          #0b1a15;
+        color: #e0e0e0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container {
+        text-align: center;
+        background: rgba(15, 61, 62, 0.6);
+        padding: 40px;
+        border-radius: 8px;
+        border: 1px solid rgba(76, 201, 240, 0.25);
+        max-width: 500px;
+        box-shadow: 0 0 20px rgba(76, 201, 240, 0.1);
+      }
+      h1 {
+        color: #4cc9f0;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        font-size: 1.2rem;
+      }
+      #mic-status {
+        margin-top: 20px;
+        font-size: 0.9rem;
+        line-height: 1.5;
+        color: #f72585;
+      }
+      #mic-status.ok {
+        color: #06d6a0;
+        text-shadow: 0 0 8px rgba(6, 214, 160, 0.4);
+      }
+      .btn {
+        margin-top: 20px;
+        padding: 10px 20px;
+        background: linear-gradient(135deg, #4cc9f0, #7b2fbe);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        display: none;
+        font-weight: bold;
+        letter-spacing: 0.05em;
+        transition: all 0.2s;
+      }
+      .btn:hover {
+        opacity: 0.9;
+        transform: translateY(-1px);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Microphone Setup</h1>
+      <div id="mic-status">Waiting to request microphone permission...</div>
+      <button id="btn-close" class="btn">Close Tab & Return to App</button>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>

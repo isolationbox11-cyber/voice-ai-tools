@@ -1,0 +1,238 @@
+{
+  "entries": [
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778434458903,
+      "timestamp": "2026-05-10T13:34:18Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: Failed",
+      "time": 1778433862612,
+      "timestamp": "2026-05-10T13:24:22Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: Failed",
+      "time": 1778433759529,
+      "timestamp": "2026-05-10T13:22:39Z"
+    },
+    {
+      "type": "warn",
+      "message": "Train upload error: Unexpected token '<', \"<!doctype \"... is not valid JSON",
+      "time": 1778424114710,
+      "timestamp": "2026-05-10T10:41:54Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 4 saved: Short Song Line",
+      "time": 1778424110599,
+      "timestamp": "2026-05-10T10:41:50Z"
+    },
+    {
+      "type": "warn",
+      "message": "Train upload error: Unexpected token '<', \"<!doctype \"... is not valid JSON",
+      "time": 1778424090351,
+      "timestamp": "2026-05-10T10:41:30Z"
+    },
+    {
+      "type": "warn",
+      "message": "Train upload error: Unexpected token '<', \"<!doctype \"... is not valid JSON",
+      "time": 1778424089481,
+      "timestamp": "2026-05-10T10:41:29Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / 6c82bc79-afb4-4516-ba4d-bbef7f7e5236",
+      "time": 1778424088866,
+      "timestamp": "2026-05-10T10:41:28Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / 36dbaf6d-209e-497b-9841-f008b5f2f94f",
+      "time": 1778424088106,
+      "timestamp": "2026-05-10T10:41:28Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / 2c16ff6f-de75-4718-9b23-73014c79289b",
+      "time": 1778424087109,
+      "timestamp": "2026-05-10T10:41:27Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / 5acfdd14-84ee-4540-95bd-25dd57222bc3",
+      "time": 1778424078276,
+      "timestamp": "2026-05-10T10:41:18Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / c188c311-1627-4c5f-bfde-116aa12e9f2c",
+      "time": 1778424070045,
+      "timestamp": "2026-05-10T10:41:10Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 4 saved: Short Song Line",
+      "time": 1778424067444,
+      "timestamp": "2026-05-10T10:41:07Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 3 saved: Curious Questions",
+      "time": 1778424050378,
+      "timestamp": "2026-05-10T10:40:50Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 2 saved: Mild Rant",
+      "time": 1778424026149,
+      "timestamp": "2026-05-10T10:40:26Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 1 saved: Calm Reading",
+      "time": 1778423999325,
+      "timestamp": "2026-05-10T10:39:59Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: Failed",
+      "time": 1778423964786,
+      "timestamp": "2026-05-10T10:39:24Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778381527043,
+      "timestamp": "2026-05-09T22:52:07Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778377985622,
+      "timestamp": "2026-05-09T21:53:05Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778377980669,
+      "timestamp": "2026-05-09T21:53:00Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778377950585,
+      "timestamp": "2026-05-09T21:52:30Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778373678338,
+      "timestamp": "2026-05-09T20:41:18Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / ",
+      "time": 1778373452468,
+      "timestamp": "2026-05-09T20:37:32Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / ",
+      "time": 1778373450219,
+      "timestamp": "2026-05-09T20:37:30Z"
+    },
+    {
+      "type": "train",
+      "message": "Training result: samples_saved / ",
+      "time": 1778373447595,
+      "timestamp": "2026-05-09T20:37:27Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 4 saved: Short Song Line",
+      "time": 1778373445096,
+      "timestamp": "2026-05-09T20:37:25Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 4 saved: Short Song Line",
+      "time": 1778373436474,
+      "timestamp": "2026-05-09T20:37:16Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 3 saved: Curious Questions",
+      "time": 1778373421733,
+      "timestamp": "2026-05-09T20:37:01Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 2 saved: Mild Rant",
+      "time": 1778373393371,
+      "timestamp": "2026-05-09T20:36:33Z"
+    },
+    {
+      "type": "train",
+      "message": "Take 1 saved: Calm Reading",
+      "time": 1778373360450,
+      "timestamp": "2026-05-09T20:36:00Z"
+    },
+    {
+      "type": "warn",
+      "message": "Shodan: Expecting value: line 1 column 1 (char 0)",
+      "time": 1778373312593,
+      "timestamp": "2026-05-09T20:35:12Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778373285690,
+      "timestamp": "2026-05-09T20:34:45Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778373141292,
+      "timestamp": "2026-05-09T20:32:21Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778371903868,
+      "timestamp": "2026-05-09T20:11:43Z"
+    },
+    {
+      "type": "info",
+      "message": "Browser TTS fallback",
+      "time": "7:57:45 PM",
+      "timestamp": "2026-05-09T23:57:45.477Z"
+    },
+    {
+      "type": "voice",
+      "message": "Spoke: \"hi\"",
+      "time": "7:57:44 PM",
+      "timestamp": "2026-05-09T23:57:44.451Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778370923265,
+      "timestamp": "2026-05-09T19:55:23Z"
+    },
+    {
+      "type": "info",
+      "message": "Server connection: OK",
+      "time": 1778370918668,
+      "timestamp": "2026-05-09T19:55:18Z"
+    },
+    {
+      "type": "warn",
+      "message": "Mic access denied: Permission dismissed",
+      "time": "7:55:07 PM",
+      "timestamp": "2026-05-09T23:55:07.158Z"
+    }
+  ]
+}

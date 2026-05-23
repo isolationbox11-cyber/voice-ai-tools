@@ -1,0 +1,14 @@
+{
+  "ff69939e-08db-4125-91eb-6cb511bc2ae3": {
+    "hash": "1b996659b6591d17b049c00ad07533fd4d98f44fed7d8bae7f74803b182ed94f",
+    "user_agent": "test-browser",
+    "created_at": 1778348092.2568908,
+    "last_used": 1778348092.2568908
+  },
+  "16274f8a-7edc-4592-b531-1ad1c9304dab": {
+    "hash": "940fe3ded5776b96dd2aee4d4de3ffbf28faf36dca1982ce841ea6bd68b1fbd8",
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+    "created_at": 1778348229.383116,
+    "last_used": 1778348229.383116
+  }
+}

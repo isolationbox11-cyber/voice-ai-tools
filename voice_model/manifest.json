@@ -1,0 +1,15 @@
+{
+  "samples": [
+    "take_0_calm.webm",
+    "take_1_rant.webm",
+    "take_2_curious.webm",
+    "take_3_singing.webm"
+  ],
+  "sample_dir": "voice_samples",
+  "trained_at": "2026-05-10T13:33:00Z",
+  "count": 4,
+  "status": "trained",
+  "note": "Voice model trained and ready",
+  "voice_id": "trained_dd5db7f7a9dd",
+  "trained": true
+}

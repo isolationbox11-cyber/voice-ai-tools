@@ -1,0 +1,24 @@
+{
+  "voice_id": "dd5db7f7a9dd",
+  "voice_name": "my_voice",
+  "sample_count": 4,
+  "reference_audio": "voice_samples/take_0_calm.webm",
+  "model_type": "google_cloud_cloned",
+  "trained": true,
+  "samples": [
+    "voice_samples/take_0_calm.webm",
+    "voice_samples/take_1_rant.webm",
+    "voice_samples/take_3_singing.webm",
+    "voice_samples/take_2_curious.webm"
+  ],
+  "quality_metrics": {
+    "sample_count": 4,
+    "total_duration": 0,
+    "avg_duration": 0,
+    "quality_score": 85,
+    "clarity_score": 80,
+    "naturalness_score": 75,
+    "recommendations": []
+  },
+  "created_at": "2026-05-10T13:33:00Z"
+}

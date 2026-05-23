@@ -33,6 +33,7 @@ def synthesize_speech(
     voice_settings:
         Dict with optional key ``voice_id`` (name of the Gemini prebuilt voice
         to use; defaults to ``"Kore"`` when absent or ``"default"``).
+        If voice_id starts with "trained_", uses voice cloning instead.
         Keys ``speaking_rate`` and ``pitch`` are not currently supported by the
         GenAI TTS API and are ignored if present.
     debug_output_path:
@@ -53,30 +54,69 @@ def synthesize_speech(
 
     # Sanitize / limit input length
     if len(text) > MAX_TEXT_LENGTH:
-        logger.warning("Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH)
+        logger.warning(
+            "Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH
+        )
         text = text[:MAX_TEXT_LENGTH]
+
+    voice_id = voice_settings.get("voice_id")
+
+    # Check if using cloned voice (starts with "trained_")
+    if voice_id and voice_id.startswith("trained_"):
+        logger.info(f"🎤 Using cloned voice: {voice_id}")
+        try:
+            # Try simple voice cloner first (Python 3.13 compatible)
+            from simple_voice_cloner import synthesize_with_clone
+
+            audio_bytes, mime_type, error = synthesize_with_clone(
+                text=text,
+                voice_id=voice_id,
+                sample_files=None,  # Will be loaded from model info
+            )
+
+            if error:
+                logger.error(f"Voice cloning failed: {error}")
+                # Fall back to default voice
+                logger.info("Falling back to default voice")
+            else:
+                if debug_output_path:
+                    with open(debug_output_path, "wb") as fh:
+                        fh.write(audio_bytes)
+                    logger.debug("Debug audio written to %s", debug_output_path)
+                return audio_bytes, mime_type, None, text
+
+        except Exception as e:
+            logger.error(f"Voice cloning error: {e}")
+            logger.info("Falling back to default voice")
+
+    # Use Google GenAI TTS (default or fallback)
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        logger.error("GOOGLE_API_KEY environment variable not set.")
+        return None, "", "Server configuration error: GOOGLE_API_KEY not set", text
 
     try:
         from google import genai
         from google.genai import types as genai_types
 
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        client = genai.Client(api_key=api_key) if api_key else genai.Client()
-
-        voice_id = voice_settings.get("voice_id")
+        client = genai.Client(api_key=api_key)
 
         # Build the speech config
-        if voice_id and voice_id != "default":
+        if (
+            voice_id
+            and voice_id not in ["default", None]
+            and not voice_id.startswith("trained_")
+        ):
+            # Use specified prebuilt voice
             voice_cfg = genai_types.VoiceConfig(
                 prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
                     voice_name=voice_id
                 )
             )
         else:
+            # Default voice
             voice_cfg = genai_types.VoiceConfig(
-                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
-                    voice_name="Kore"
-                )
+                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name="Kore")
             )
 
         response = client.models.generate_content(
