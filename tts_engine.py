@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TTS Engine – Text-to-Speech synthesis using Hugging Face models.
+TTS Engine – Text-to-Speech synthesis using espeak-ng.
 
 Privacy-first design: audio bytes are returned in-memory and never written to
 disk unless an explicit ``debug_output_path`` is provided.
@@ -9,42 +9,12 @@ disk unless an explicit ``debug_output_path`` is provided.
 import logging
 from typing import Optional, Tuple
 
-import numpy as np
-import scipy.io.wavfile as wavfile
-import torch
-from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
+import subprocess
 
 logger = logging.getLogger(__name__)
 
 # Maximum text length accepted for synthesis (prevents abuse / runaway requests)
 MAX_TEXT_LENGTH = 1000
-
-# Hugging Face TTS model
-_TTS_MODEL = "microsoft/speecht5_tts"
-_VOCODER_MODEL = "microsoft/speecht5_hifigan"
-_EMBEDDINGS_MODEL = "microsoft/speecht5_hifigan"
-
-# Model cache (lazy loading)
-_processor = None
-_model = None
-_vocoder = None
-_speaker_embeddings = None
-
-
-def _load_models():
-    """Lazy load Hugging Face TTS models."""
-    global _processor, _model, _vocoder, _speaker_embeddings
-    if _processor is None:
-        logger.info("Loading Hugging Face TTS models...")
-        _processor = SpeechT5Processor.from_pretrained(_TTS_MODEL)
-        _model = SpeechT5ForTextToSpeech.from_pretrained(_TTS_MODEL)
-        _vocoder = SpeechT5HifiGan.from_pretrained(_VOCODER_MODEL)
-
-        # Load default speaker embeddings
-        import torch
-
-        _speaker_embeddings = torch.randn(1, 512)
-        logger.info("Hugging Face TTS models loaded successfully")
 
 
 def synthesize_speech(
@@ -52,7 +22,7 @@ def synthesize_speech(
     voice_settings: dict,
     debug_output_path: Optional[str] = None,
 ) -> Tuple[Optional[bytes], str, Optional[str], str]:
-    """Synthesize speech for *text* using Hugging Face models.
+    """Synthesize speech for *text* using espeak-ng.
 
     Parameters
     ----------
@@ -84,29 +54,14 @@ def synthesize_speech(
         text = text[:MAX_TEXT_LENGTH]
 
     try:
-        _load_models()
+        # Use espeak-ng for TTS
+        result = subprocess.run(
+            ["espeak-ng", "-v", "en", "-w", "/dev/stdout", text],
+            capture_output=True,
+            check=True,
+        )
 
-        # Prepare inputs
-        inputs = _processor(text=text, return_tensors="pt")
-
-        # Generate speech
-        with torch.no_grad():
-            speech = _model.generate_speech(
-                inputs["input_ids"], _speaker_embeddings, vocoder=_vocoder
-            )
-
-        # Convert to WAV format
-        audio_array = speech.cpu().numpy().squeeze()
-        audio_array = (audio_array * 32767).astype(np.int16)  # Convert to 16-bit PCM
-
-        # Create WAV file in memory
-        import io
-
-        wav_buffer = io.BytesIO()
-        wavfile.write(wav_buffer, 16000, audio_array)  # SpeechT5 uses 16kHz
-        wav_buffer.seek(0)
-
-        audio_bytes = wav_buffer.read()
+        audio_bytes = result.stdout
         mime_type = "audio/wav"
 
         logger.info(
