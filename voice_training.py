@@ -1,8 +1,10 @@
 import os
+import re
 import subprocess
 import time
 import uuid
 from pathlib import Path
+from werkzeug.utils import secure_filename
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
@@ -240,7 +242,28 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     Returns raw WAV bytes, or None if synthesis fails.
     """
     import json
-    embedding_path = Path("voice_embeddings") / f"{voice_id}.json"
+
+    # Accept only expected trained-voice identifiers.
+    if not isinstance(voice_id, str):
+        print(f"Invalid voice_id format: {voice_id!r}")
+        return None
+    m = re.fullmatch(r"(local_voice_[A-Za-z0-9_-]+)", voice_id.strip())
+    if not m:
+        print(f"Invalid voice_id format: {voice_id!r}")
+        return None
+
+    # Build file path from canonicalized, allowlisted identifier only.
+    candidate_voice_id = m.group(1)
+    safe_voice_id = secure_filename(candidate_voice_id)
+    if safe_voice_id != candidate_voice_id:
+        print(f"Rejected non-canonical voice_id after sanitization: {voice_id!r}")
+        return None
+    embeddings_root = Path("voice_embeddings").resolve()
+    embedding_path = (embeddings_root / f"{safe_voice_id}.json").resolve()
+    if not _is_within_root(embedding_path, embeddings_root):
+        print(f"Rejected embedding path outside root: {embedding_path}")
+        return None
+
     if not embedding_path.exists():
         print(f"No embedding found for {voice_id}")
         return None
