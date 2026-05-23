@@ -23,6 +23,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+from dotenv import load_dotenv
+
 from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -30,6 +32,9 @@ from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 
 logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ── PDF analysis constants ─────────────────────────────────────────────
 IP_PATTERN = re.compile(
@@ -106,7 +111,7 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 def add_security_headers(response: Response) -> Response:
     """
     Add strict security headers to an HTTP response.
-    
+
     Returns:
         response (Response): The same Response object with
             `X-Content-Type-Options`, `X-Frame-Options`, and
@@ -124,9 +129,9 @@ def add_security_headers(response: Response) -> Response:
 def _check_token() -> bool:
     """
     Validate the incoming request using the configured shared-secret token.
-    
+
     If no server token is configured, authorization is not enforced and the function permits the request.
-    
+
     Returns:
         bool: `True` if the request is authorized (or no server token is configured), `False` otherwise.
     """
@@ -139,7 +144,7 @@ def _check_token() -> bool:
 def _is_valid_ip(ip: str) -> bool:
     """
     Determine whether a string is a valid IPv4 address in dotted-decimal notation.
-    
+
     Returns:
         True if `ip` consists of four numeric octets each between 0 and 255, `False` otherwise.
     """
@@ -164,11 +169,11 @@ def _is_valid_ip(ip: str) -> bool:
 def _analyze_text_content(text: str, raw_bytes: bytes) -> Dict[str, Any]:
     """
     Analyze text and raw bytes to extract IPv4 addresses, URLs, and detect suspicious keywords.
-    
+
     Parameters:
         text (str): Extracted textual content to search for IPs and URLs using the module regex patterns.
         raw_bytes (bytes): Original raw bytes (e.g., PDF file bytes) decoded and checked for presence of configured suspicious keywords.
-    
+
     Returns:
         result (Dict[str, Any]): Dictionary with keys:
             - "ips" (List[str]): Unique IPv4 addresses found in `text`.
@@ -186,17 +191,17 @@ def _analyze_text_content(text: str, raw_bytes: bytes) -> Dict[str, Any]:
 def _parse_with_pdfplumber(raw: bytes) -> Dict[str, Any]:
     """
     Extracts metadata, links, IP addresses, page count, and a suspicious-content flag from PDF data.
-    
+
     Processes the provided PDF bytes and returns a dictionary with the following keys:
     - `metadata` (Dict[str, str]): PDF metadata entries converted to strings.
     - `links` (List[str]): unique URLs found from page hyperlinks and inline text.
     - `ips` (List[str]): unique IPv4 addresses detected in the document text.
     - `suspicious` (bool): `true` if any suspicious keywords appear in the raw content, `false` otherwise.
     - `pages` (int): number of pages in the PDF.
-    
+
     Parameters:
         raw (bytes): Raw bytes of a PDF file.
-    
+
     Returns:
         Dict[str, Any]: Analysis result containing metadata, links, ips, suspicious flag, and pages count.
     """
@@ -230,7 +235,7 @@ def _parse_with_pdfplumber(raw: bytes) -> Dict[str, Any]:
 def _parse_with_pypdf2(raw: bytes) -> Dict[str, Any]:
     """
     Extract metadata, detected links, IPv4 addresses, and a suspicious-content flag from PDF bytes using PyPDF2.
-    
+
     Returns:
         result (Dict[str, Any]): Analysis dictionary with keys:
             - metadata (Dict[str, str]): PDF metadata fields mapped to their string values.
@@ -264,10 +269,10 @@ def _parse_with_pypdf2(raw: bytes) -> Dict[str, Any]:
 def _parse_raw_text(raw: bytes) -> Dict[str, Any]:
     """
     Fallback PDF text extraction from raw bytes when no PDF parsing libraries are available.
-    
+
     Parameters:
         raw (bytes): Raw file bytes (typically a PDF) to scan with simple text-based heuristics.
-    
+
     Returns:
         dict: Analysis with keys:
             - metadata (dict): note advising installation of PDF libraries for full extraction.
@@ -291,12 +296,12 @@ def _parse_raw_text(raw: bytes) -> Dict[str, Any]:
 def _extract_pdf_analysis(raw: bytes) -> Dict[str, Any]:
     """
     Analyze PDF bytes and return extracted metadata, links, IPs, page count, and suspicious-content flag.
-    
+
     Attempts available PDF parsers in preferred order and falls back to a raw-text extraction when parser libraries are unavailable or fail. On unrecoverable parse errors the result may contain an `"error"` key describing the failure.
-    
+
     Parameters:
         raw (bytes): Raw bytes of the uploaded PDF file.
-    
+
     Returns:
         Dict[str, Any]: An analysis dictionary that includes, at minimum, the keys:
             - `ips`: list of extracted IPv4 addresses
@@ -327,11 +332,11 @@ def _extract_pdf_analysis(raw: bytes) -> Dict[str, Any]:
 def _read_json_safe(file_path: Path, default: Any) -> Any:
     """
     Read JSON from the given path and return a fallback on failure; the caller is responsible for any locking.
-    
+
     Parameters:
         file_path (Path): Path to the JSON file to read.
         default (Any): Value to return if the file does not exist or cannot be read/parsed.
-    
+
     Returns:
         Any: The parsed JSON content from the file, or `default` if the file is missing or an error occurs while reading/parsing.
     """
@@ -347,12 +352,12 @@ def _read_json_safe(file_path: Path, default: Any) -> Any:
 def _locked_read_json(file_path: Path, lock: threading.Lock, default: Any) -> Any:
     """
     Read JSON from the given path while holding the provided lock.
-    
+
     Parameters:
         file_path (Path): Path to the JSON file to read.
         lock (threading.Lock): Lock to acquire during the read to ensure thread safety.
         default (Any): Value to return if the file does not exist or cannot be read/parsed.
-    
+
     Returns:
         Any: The parsed JSON content from `file_path`, or `default` if reading or parsing fails.
     """
@@ -363,9 +368,9 @@ def _locked_read_json(file_path: Path, lock: threading.Lock, default: Any) -> An
 def _atomic_write_json(file_path: Path, data: Any) -> None:
     """
     Atomically write JSON-serializable `data` to `file_path`.
-    
+
     Writes `data` to a temporary file, ensures on-disk flush, and atomically replaces the target file so the destination is never left in a partially written state if an error occurs.
-    
+
     Parameters:
         file_path (Path): Destination path for the JSON file.
         data (Any): JSON-serializable object to write.
@@ -392,7 +397,7 @@ def _atomic_write_json(file_path: Path, data: Any) -> None:
 def _cached_shodan_lookup(ip: str, api_key: str) -> Tuple[Dict[str, Any], int]:
     """
     Perform a Shodan host lookup and return the response payload together with an HTTP-like status code.
-    
+
     Returns:
         (dict, int): A tuple where the first element is either the parsed JSON response from the Shodan API
         or an error dictionary (e.g., {"error": "..."}), and the second element is an HTTP-like status code:
@@ -430,7 +435,7 @@ def _clear_shodan_cache() -> None:
 def index() -> Response:
     """
     Provide a JSON overview of the service and its available endpoints.
-    
+
     Returns:
         Response: A Flask Response containing a JSON object with the service status, name, and a mapping of endpoint descriptions.
     """
@@ -457,7 +462,7 @@ def index() -> Response:
 def health() -> Response:
     """
     Report overall service health and the current voice model status.
-    
+
     Returns:
         A JSON response containing:
           - `status` (str): `"ok"` when the service is healthy.
@@ -472,18 +477,18 @@ def health() -> Response:
 def tts() -> Response | Tuple[Response, int]:
     """
     Synthesize speech from provided text and return the resulting audio response.
-    
+
     Accepts a JSON body with the following optional keys:
     - `text` (string, required): The text to synthesize.
     - `voice_id` (string, optional): Voice identifier to use; the special value `"cloned"` maps to the default cloned voice.
     - `speed` (string, optional): One of `"fast"`, `"slow"`, or other; maps to a speaking rate.
-    
+
     Behavior and error responses:
     - Requires a valid `X-Token` when the service is configured with `VOICE_SERVER_TOKEN`; otherwise responds 401.
     - Returns 400 if `text` is missing/empty or if `text` exceeds the maximum allowed length.
     - Returns 503 if the TTS engine is not available.
     - Returns 500 with an error message if the TTS engine reports an error or an internal exception occurs.
-    
+
     Returns:
     - On success: a Response whose body is the raw audio bytes with an appropriate MIME type (e.g., `audio/wav` or `audio/mpeg`).
     - On failure: a JSON error object and the corresponding HTTP status code (400, 401, 500, or 503).
@@ -540,9 +545,9 @@ def tts() -> Response | Tuple[Response, int]:
 def presets() -> Response | Tuple[Response, int]:
     """
     Handle retrieval and creation or update of saved voice presets.
-    
+
     GET returns the stored presets. POST expects a JSON object containing a "name" field (and any other preset fields); it creates a new preset or replaces an existing preset with the same name and persists the updated presets to disk.
-    
+
     Returns:
     - On GET: a JSON object with a "presets" list.
     - On successful POST: a JSON object `{"ok": True}`.
@@ -586,10 +591,10 @@ def presets() -> Response | Tuple[Response, int]:
 def log_endpoint() -> Response | Tuple[Response, int]:
     """
     Handle retrieval and submission of session log entries.
-    
+
     GET returns the stored log JSON object (contains an "entries" list).
     POST accepts a JSON log entry from the request body; if the entry's "action" is "clear" the log is emptied, otherwise a timestamp is added if missing, the entry is prepended to the entries list, the list is truncated to at most 500 items, and the updated log is written atomically.
-    
+
     Returns:
     - For GET: the stored log object (dict with "entries" list).
     - For POST: `{"ok": True}` on successful save, `{"error": "Failed to save log"}` with HTTP 500 on write failure, or `{"error": "Unauthorized"}` with HTTP 401 when authentication fails.
@@ -630,9 +635,9 @@ def log_endpoint() -> Response | Tuple[Response, int]:
 def shodan() -> Response | Tuple[Response, int]:
     """
     Handle a Shodan host lookup for the IPv4 address provided in the request query.
-    
+
     Expects an `ip` query parameter containing an IPv4 address. Enforces the service token via the `X-Token` header, validates the IP format, and requires the server to be configured with `SHODAN_API_KEY`. Returns appropriate JSON error responses for authorization failure (401), missing/invalid `ip` (400), or missing API key (503).
-    
+
     Returns:
         A Flask `Response` with JSON. On success returns the Shodan host data and the HTTP status code returned by the Shodan lookup; on error returns a JSON object with an `error` message and the corresponding HTTP status (401, 400, or 503).
     """
@@ -657,9 +662,9 @@ def shodan() -> Response | Tuple[Response, int]:
 def analyze_pdf() -> Response | Tuple[Response, int]:
     """
     Analyze an uploaded PDF and return extracted metadata, text links, IP addresses, page count, and a suspicious-content flag.
-    
+
     Accepts a multipart file upload under the form key "file". Performs request authorization and validates that the uploaded file is a PDF. On success returns a JSON object with keys such as `metadata`, `pages`, `links`, `ips`, and `suspicious`. If the parser fails the response contains an `error` field.
-    
+
     Returns:
         A Flask `Response` containing JSON:
           - On success: analysis object with `metadata`, `pages`, `links`, `ips`, `suspicious`, etc.
@@ -692,7 +697,7 @@ def analyze_pdf() -> Response | Tuple[Response, int]:
 def train() -> Response | Tuple[Response, int]:
     """
     Handle uploaded WAV files: save valid .wav uploads to the samples directory, write an initial manifest, attempt to train a voice model from the saved samples (if training code is available), update the manifest with training results, and return a summary.
-    
+
     Returns:
         JSON response containing:
           - ok (bool): true on successful processing.
@@ -705,7 +710,7 @@ def train() -> Response | Tuple[Response, int]:
           - voice_id (str, optional): identifier returned by the training step when status is `"trained"`.
           - note (str, optional): explanatory note when training was not attempted.
           - error (str, optional): error message when training failed.
-    
+
     Possible HTTP responses:
         - 200 OK: processing succeeded and a JSON body with manifest and `ok: True` is returned.
         - 400 Bad Request: no files uploaded or no valid `.wav` files were saved.
@@ -784,7 +789,7 @@ def train() -> Response | Tuple[Response, int]:
 def model_status() -> Response | Tuple[Response, int]:
     """
     Return the current voice model training status as a JSON response.
-    
+
     Returns:
         response (Response | Tuple[Response, int]): On success, a JSON object with:
             - `trained` (bool): True if a model manifest indicates training has occurred.
@@ -803,9 +808,9 @@ def model_status() -> Response | Tuple[Response, int]:
 def _model_status() -> Dict[str, Any]:
     """
     Return the current voice model status based on the model manifest file.
-    
+
     Reads the manifest at MODEL_DIR / "manifest.json" (using the module's locked reader) and returns a dictionary describing whether a model is trained and related metadata.
-    
+
     Returns:
         status (dict): If a manifest exists, a dict with keys:
             - "trained" (bool): True.
