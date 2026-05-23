@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 import uuid
@@ -240,7 +241,18 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     Returns raw WAV bytes, or None if synthesis fails.
     """
     import json
-    embedding_path = Path("voice_embeddings") / f"{voice_id}.json"
+
+    # Accept only expected trained-voice identifiers.
+    if not isinstance(voice_id, str) or not re.fullmatch(r"local_voice_[A-Za-z0-9_-]+", voice_id):
+        print(f"Invalid voice_id format: {voice_id!r}")
+        return None
+
+    embeddings_root = Path("voice_embeddings").resolve()
+    embedding_path = (embeddings_root / f"{voice_id}.json").resolve()
+    if not _is_within_root(embedding_path, embeddings_root):
+        print(f"Rejected embedding path outside root: {embedding_path}")
+        return None
+
     if not embedding_path.exists():
         print(f"No embedding found for {voice_id}")
         return None
