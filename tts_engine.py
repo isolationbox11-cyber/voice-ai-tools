@@ -21,6 +21,9 @@ import os
 import threading
 from typing import Optional, Tuple
 
+import numpy as np
+import scipy.io.wavfile as wavfile
+
 logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 2000
@@ -45,6 +48,29 @@ def _get_client():
                     logger.error("Failed to create GenAI client: %s", e)
                     raise
     return _genai_client
+
+
+def _convert_pcm_to_wav(pcm_bytes: bytes, sample_rate: int = 24000) -> bytes:
+    """Convert raw PCM audio bytes to WAV format.
+
+    Args:
+        pcm_bytes: Raw PCM audio data (16-bit signed, little-endian)
+        sample_rate: Sample rate in Hz (default 24000)
+
+    Returns:
+        WAV format audio bytes
+    """
+    # Convert bytes to numpy array (16-bit signed, little-endian)
+    audio_array = np.frombuffer(pcm_bytes, dtype=np.int16)
+
+    # Create WAV file in memory
+    import io
+
+    wav_buffer = io.BytesIO()
+    wavfile.write(wav_buffer, sample_rate, audio_array)
+    wav_buffer.seek(0)
+
+    return wav_buffer.read()
 
 
 def synthesize_speech(
@@ -178,6 +204,12 @@ def synthesize_speech(
         part = response.candidates[0].content.parts[0]
         audio_bytes: bytes = part.inline_data.data
         mime_type: str = part.inline_data.mime_type or "audio/wav"
+
+        # Convert PCM to WAV if needed (browser compatibility)
+        if mime_type.startswith("audio/L16") or "pcm" in mime_type.lower():
+            logger.info(f"Converting PCM audio to WAV format for browser compatibility")
+            audio_bytes = _convert_pcm_to_wav(audio_bytes)
+            mime_type = "audio/wav"
 
         logger.info(
             f"TTS audio generated: {len(audio_bytes)} bytes, mime type: {mime_type}"
