@@ -243,12 +243,18 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
     import json
 
     # Accept only expected trained-voice identifiers.
-    if not isinstance(voice_id, str) or not re.fullmatch(r"local_voice_[A-Za-z0-9_-]+", voice_id):
+    if not isinstance(voice_id, str):
+        print(f"Invalid voice_id format: {voice_id!r}")
+        return None
+    m = re.fullmatch(r"(local_voice_[A-Za-z0-9_-]+)", voice_id.strip())
+    if not m:
         print(f"Invalid voice_id format: {voice_id!r}")
         return None
 
+    # Build file path from canonicalized, allowlisted identifier only.
+    safe_voice_id = m.group(1)
     embeddings_root = Path("voice_embeddings").resolve()
-    embedding_path = (embeddings_root / f"{voice_id}.json").resolve()
+    embedding_path = (embeddings_root / f"{safe_voice_id}.json").resolve()
     if not _is_within_root(embedding_path, embeddings_root):
         print(f"Rejected embedding path outside root: {embedding_path}")
         return None
