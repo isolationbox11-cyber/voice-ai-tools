@@ -144,6 +144,19 @@ function initVoice() {
   const stockBtn = document.getElementById('btn-mode-stock');
   const statusEl = document.getElementById('voice-status');
 
+  // Suggested phrases functionality
+  const phraseButtons = document.querySelectorAll('.phrase-btn');
+  phraseButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const txt = document.getElementById('tts-text');
+      const phrase = btn.getAttribute('data-phrase');
+      if (txt && phrase) {
+        txt.value = phrase;
+        if (statusEl) statusEl.textContent = 'Phrase loaded';
+      }
+    });
+  });
+
   if (clonedBtn) clonedBtn.addEventListener('click', () => {
     useClonedVoice = true;
     clonedBtn.classList.add('active');
