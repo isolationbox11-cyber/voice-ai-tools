@@ -4,6 +4,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
+from werkzeug.utils import secure_filename
 
 # Allowed audio extensions for voice training clips
 _ALLOWED_AUDIO_SUFFIXES = {".webm", ".wav", ".mp3", ".ogg", ".flac", ".m4a"}
@@ -252,7 +253,11 @@ def synthesize_with_cloned_voice(text: str, voice_id: str) -> bytes | None:
         return None
 
     # Build file path from canonicalized, allowlisted identifier only.
-    safe_voice_id = m.group(1)
+    candidate_voice_id = m.group(1)
+    safe_voice_id = secure_filename(candidate_voice_id)
+    if safe_voice_id != candidate_voice_id:
+        print(f"Rejected non-canonical voice_id after sanitization: {voice_id!r}")
+        return None
     embeddings_root = Path("voice_embeddings").resolve()
     embedding_path = (embeddings_root / f"{safe_voice_id}.json").resolve()
     if not _is_within_root(embedding_path, embeddings_root):
