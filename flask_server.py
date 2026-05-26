@@ -21,6 +21,9 @@ import re
 import threading
 import time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor(max_workers=4)
 from typing import Any, Dict, Tuple
 
 from dotenv import load_dotenv
@@ -79,17 +82,38 @@ VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "")
 
 SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH = 2000
-PRESET_PATH = Path("voice_presets.json")
-LOG_PATH = Path("session_log.json")
-MODEL_DIR = Path("voice_model")
+DB_PATH = Path("app.db")
 SAMPLES_DIR = Path("voice_samples")
 SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_DIR = Path("voice_model")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# Locks for simple thread-safe file operations
-_preset_lock = threading.Lock()
-_log_lock = threading.Lock()
-_model_lock = threading.Lock()
+import sqlite3
+
+def init_db():
+    with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute('''CREATE TABLE IF NOT EXISTS presets (
+                            name TEXT PRIMARY KEY,
+                            data TEXT
+                        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS logs (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp TEXT,
+                            data TEXT
+                        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS manifest (
+                            id INTEGER PRIMARY KEY CHECK (id = 1),
+                            data TEXT
+                        )''')
+        conn.commit()
+
+init_db()
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 _extra_origins = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
@@ -516,7 +540,21 @@ def tts() -> Response | Tuple[Response, int]:
         if data.get("voice_id"):
             requested_voice = data.get("voice_id")
             if requested_voice == "cloned":
-                voice_settings["voice_id"] = "kore"
+                voice_settings["voice_id"] = "cloned"
+                # Fetch cloned voice metadata from the database manifest
+                try:
+                    conn = get_db_connection()
+                    row = conn.execute("SELECT data FROM manifest WHERE id = 1").fetchone()
+                    conn.close()
+                    if row:
+                        manifest_data = json.loads(row["data"])
+                        # voice_id contains the JSON string returned by train_from_samples
+                        if manifest_data.get("status") == "trained" and manifest_data.get("voice_id"):
+                            ref_data = json.loads(manifest_data["voice_id"])
+                            voice_settings["ref_audio"] = ref_data.get("ref_audio")
+                            voice_settings["ref_text"] = ref_data.get("ref_text")
+                except Exception as e:
+                    logger.warning(f"Failed to load cloned voice metadata: {e}")
             else:
                 voice_settings["voice_id"] = requested_voice
 
@@ -556,33 +594,30 @@ def presets() -> Response | Tuple[Response, int]:
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
 
+    conn = get_db_connection()
     if request.method == "GET":
-        return jsonify(_locked_read_json(PRESET_PATH, _preset_lock, {"presets": []}))
+        rows = conn.execute("SELECT data FROM presets").fetchall()
+        presets_list = [json.loads(row["data"]) for row in rows]
+        conn.close()
+        return jsonify({"presets": presets_list})
 
     data = request.get_json(silent=True)
     if not data or not data.get("name"):
+        conn.close()
         return jsonify({"error": "Preset needs a name"}), 400
 
-    with _preset_lock:
-        presets_data = _read_json_safe(PRESET_PATH, {"presets": []})
-        presets_list = presets_data.get("presets", [])
-
-        existing = next(
-            (i for i, p in enumerate(presets_list) if p.get("name") == data["name"]),
-            None,
+    try:
+        conn.execute(
+            "INSERT INTO presets (name, data) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET data=excluded.data",
+            (data["name"], json.dumps(data))
         )
-
-        if existing is not None:
-            presets_list[existing] = data
-        else:
-            presets_list.append(data)
-
-        try:
-            _atomic_write_json(PRESET_PATH, {"presets": presets_list})
-            return jsonify({"ok": True})
-        except Exception as e:
-            logger.error(f"Failed to save preset: {e}")
-            return jsonify({"error": "Failed to save preset"}), 500
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"Failed to save preset: {e}")
+        conn.close()
+        return jsonify({"error": "Failed to save preset"}), 500
 
 
 # ── /log ──────────────────────────────────────────────────────────────
@@ -602,31 +637,32 @@ def log_endpoint() -> Response | Tuple[Response, int]:
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
 
+    conn = get_db_connection()
     if request.method == "GET":
-        return jsonify(_locked_read_json(LOG_PATH, _log_lock, {"entries": []}))
+        rows = conn.execute("SELECT data FROM logs ORDER BY id DESC LIMIT 500").fetchall()
+        entries = [json.loads(row["data"]) for row in rows]
+        conn.close()
+        return jsonify({"entries": entries})
 
     entry = request.get_json(silent=True) or {}
 
-    with _log_lock:
-        log_data = _read_json_safe(LOG_PATH, {"entries": []})
-        entries = log_data.get("entries", [])
-
+    try:
         if entry.get("action") == "clear":
-            entries = []
+            conn.execute("DELETE FROM logs")
         else:
             entry["timestamp"] = entry.get(
                 "timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ")
             )
-            entries.insert(0, entry)
-            if len(entries) > 500:
-                entries = entries[:500]
-
-        try:
-            _atomic_write_json(LOG_PATH, {"entries": entries})
-            return jsonify({"ok": True})
-        except Exception as e:
-            logger.error(f"Failed to save log: {e}")
-            return jsonify({"error": "Failed to save log"}), 500
+            conn.execute("INSERT INTO logs (timestamp, data) VALUES (?, ?)", (entry["timestamp"], json.dumps(entry)))
+            # Keep only last 500
+            conn.execute("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 500)")
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        logger.error(f"Failed to save log: {e}")
+        conn.close()
+        return jsonify({"error": "Failed to save log"}), 500
 
 
 # ── /shodan ───────────────────────────────────────────────────────────
@@ -725,28 +761,47 @@ def train() -> Response | Tuple[Response, int]:
         return jsonify({"error": "No audio files uploaded"}), 400
 
     saved = []
+    import subprocess
+    from pathlib import Path
     for f in files:
         if not f or not f.filename:
             continue
 
         fname = f.filename
-        if not fname.lower().endswith(".wav"):
+        if not fname.lower().endswith((".wav", ".webm")):
             continue
 
         safe_fname = (
-            secure_filename(fname) or f"clip_{int(time.time())}_{len(saved)}.wav"
+            secure_filename(fname) or f"clip_{int(time.time())}_{len(saved)}{Path(fname).suffix}"
         )
 
         dest = SAMPLES_DIR / safe_fname
 
         try:
             f.save(dest)
+            
+            if dest.suffix.lower() == ".webm":
+                wav_dest = dest.with_suffix(".wav")
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-i", str(dest), "-ar", "44100", "-ac", "1", str(wav_dest)],
+                        check=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    dest.unlink()
+                    dest = wav_dest
+                    safe_fname = dest.name
+                except Exception as e:
+                    logger.error(f"Failed to convert {fname} to wav: {e}")
+                    continue
+
             saved.append(safe_fname)
         except Exception as e:
             logger.warning(f"Failed to save file {fname}: {e}")
 
     if not saved:
-        return jsonify({"error": "No valid .wav files were saved"}), 400
+        return jsonify({"error": "No valid audio files were saved"}), 400
 
     manifest = {
         "samples": saved,
@@ -755,12 +810,14 @@ def train() -> Response | Tuple[Response, int]:
         "count": len(saved),
     }
 
-    with _model_lock:
-        try:
-            _atomic_write_json(MODEL_DIR / "manifest.json", manifest)
-        except Exception as e:
-            logger.error(f"Failed to save manifest: {e}")
-            return jsonify({"error": "Failed to save manifest"}), 500
+    conn = get_db_connection()
+    try:
+        conn.execute("INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (json.dumps(manifest),))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Failed to save manifest: {e}")
+        conn.close()
+        return jsonify({"error": "Failed to save manifest"}), 500
 
     try:
         from voice_training import train_from_samples
@@ -775,11 +832,12 @@ def train() -> Response | Tuple[Response, int]:
         manifest["status"] = "training_failed"
         manifest["error"] = str(e)
 
-    with _model_lock:
-        try:
-            _atomic_write_json(MODEL_DIR / "manifest.json", manifest)
-        except Exception as e:
-            logger.warning(f"Failed to update manifest after training: {e}")
+    try:
+        conn.execute("INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (json.dumps(manifest),))
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update manifest after training: {e}")
+    conn.close()
 
     return jsonify({"ok": True, "saved": saved, **manifest})
 
@@ -821,8 +879,12 @@ def _model_status() -> Dict[str, Any]:
             - "error" (Optional[str]): Error message from training, if present.
           If no manifest exists, returns {"trained": False}.
     """
-    manifest = _locked_read_json(MODEL_DIR / "manifest.json", _model_lock, None)
-    if manifest:
+    conn = get_db_connection()
+    row = conn.execute("SELECT data FROM manifest WHERE id = 1").fetchone()
+    conn.close()
+    
+    if row:
+        manifest = json.loads(row["data"])
         return {
             "trained": True,
             "count": manifest.get("count", 0),
