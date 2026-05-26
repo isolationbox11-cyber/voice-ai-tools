@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 # Attempt to load google genai if installed
 try:
     from google import genai
+
     HAS_GOOGLE_GENAI = True
 except ImportError:
     HAS_GOOGLE_GENAI = False
@@ -26,26 +27,40 @@ DEFAULT_REF_TEXT = "This is a calm voice sample for cloning."
 
 class TTSEngine(ABC):
     @abstractmethod
-    def synthesize(self, text: str, voice_settings: dict) -> Tuple[Optional[bytes], str, Optional[str]]:
+    def synthesize(
+        self, text: str, voice_settings: dict
+    ) -> Tuple[Optional[bytes], str, Optional[str]]:
         pass
 
 
 class F5TTSEngine(TTSEngine):
     def __init__(self):
-        self.cli_path = os.environ.get("F5_TTS_PATH", "/opt/miniconda3/envs/f5-tts/bin/f5-tts_infer-cli")
-        
-    def synthesize(self, text: str, voice_settings: dict) -> Tuple[Optional[bytes], str, Optional[str]]:
+        self.cli_path = os.environ.get(
+            "F5_TTS_PATH", "/opt/miniconda3/envs/f5-tts/bin/f5-tts_infer-cli"
+        )
+        self.output_file = "tests/infer_cli_basic.wav"
+
+    def synthesize(
+        self, text: str, voice_settings: dict
+    ) -> Tuple[Optional[bytes], str, Optional[str]]:
         ref_audio = voice_settings.get("ref_audio", DEFAULT_REF_AUDIO)
         ref_text = voice_settings.get("ref_text", DEFAULT_REF_TEXT)
 
         try:
+            # Ensure tests directory exists
+            os.makedirs("tests", exist_ok=True)
+
             result = subprocess.run(
                 [
                     self.cli_path,
-                    "--model", "F5TTS_v1_Base",
-                    "--ref_audio", ref_audio,
-                    "--ref_text", ref_text,
-                    "--gen_text", text,
+                    "--model",
+                    "F5TTS_v1_Base",
+                    "--ref_audio",
+                    ref_audio,
+                    "--ref_text",
+                    ref_text,
+                    "--gen_text",
+                    text,
                 ],
                 capture_output=True,
                 check=False,
@@ -55,7 +70,14 @@ class F5TTSEngine(TTSEngine):
                 logger.error(f"F5-TTS failed: {result.stderr.decode()}")
                 return None, "", "F5-TTS inference failed"
 
-            return result.stdout, "audio/wav", None
+            # F5-TTS writes to file, not stdout - read the output file
+            if os.path.exists(self.output_file):
+                with open(self.output_file, "rb") as f:
+                    audio_bytes = f.read()
+                return audio_bytes, "audio/wav", None
+            else:
+                logger.error(f"F5-TTS output file not found: {self.output_file}")
+                return None, "", "F5-TTS output file not found"
         except Exception as e:
             logger.exception("F5-TTS process exception")
             return None, "", str(e)
@@ -66,15 +88,19 @@ class GoogleGenAIEngine(TTSEngine):
         if not HAS_GOOGLE_GENAI:
             raise RuntimeError("google-genai package is not installed.")
         self.client = genai.Client()
-        
-    def synthesize(self, text: str, voice_settings: dict) -> Tuple[Optional[bytes], str, Optional[str]]:
+
+    def synthesize(
+        self, text: str, voice_settings: dict
+    ) -> Tuple[Optional[bytes], str, Optional[str]]:
         # Placeholder for actual Google GenAI TTS integration.
         # The exact implementation depends on the expected google-genai library endpoints.
         return b"", "audio/wav", "Google GenAI TTS unimplemented"
 
 
 class EspeakEngine(TTSEngine):
-    def synthesize(self, text: str, voice_settings: dict) -> Tuple[Optional[bytes], str, Optional[str]]:
+    def synthesize(
+        self, text: str, voice_settings: dict
+    ) -> Tuple[Optional[bytes], str, Optional[str]]:
         try:
             result = subprocess.run(
                 ["espeak-ng", "-v", "en", "-w", "/dev/stdout", text],
@@ -99,7 +125,7 @@ def synthesize_speech(
         text = text[:MAX_TEXT_LENGTH]
 
     provider = os.environ.get("TTS_PROVIDER", "f5-tts").lower()
-    
+
     engine = None
     if provider == "google":
         try:
@@ -113,10 +139,12 @@ def synthesize_speech(
         engine = EspeakEngine()
 
     audio_bytes, mime_type, error = engine.synthesize(text, voice_settings)
-    
+
     # Fallback to espeak if primary engine fails
     if error and not isinstance(engine, EspeakEngine):
-        logger.warning(f"Primary engine {provider} failed: {error}. Falling back to espeak-ng.")
+        logger.warning(
+            f"Primary engine {provider} failed: {error}. Falling back to espeak-ng."
+        )
         engine = EspeakEngine()
         audio_bytes, mime_type, error = engine.synthesize(text, voice_settings)
 
@@ -128,4 +156,3 @@ def synthesize_speech(
             logger.error(f"Failed to write debug audio: {e}")
 
     return audio_bytes, mime_type, error, text
-
