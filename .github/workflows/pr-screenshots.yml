@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # needed to post the comment
+  pull-requests: write
 
 jobs:
   screenshot:
@@ -22,18 +22,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install Python deps
         run: |
           pip install --quiet \
-            flask flask-cors flask-limiter python-dotenv \
-            requests dnspython python-whois phonenumbers
+          flask flask-cors flask-limiter python-dotenv \
+          requests dnspython python-whois phonenumbers Pillow
 
       # ── 3. Node + Playwright ───────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install Playwright + Chromium
         run: |
           npm install --no-save playwright
@@ -51,25 +49,23 @@ jobs:
             sleep 1
           done
 
-      # ── 5. Take screenshots ────────────────────────────────────────
+      # ── 5. Take screenshots (viewport 900x600 for smaller file size) ────
       - name: Capture UI screenshots
         run: |
           mkdir -p screenshots
           node - <<'EOF'
           const { chromium } = require('playwright');
-
           (async () => {
             const browser = await chromium.launch();
             const context = await browser.newContext({
-              viewport: { width: 1280, height: 800 },
+              viewport: { width: 900, height: 600 },
             });
-
             async function shot(url, filename, waitMs = 1500) {
               const page = await context.newPage();
               try {
                 await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
                 await page.waitForTimeout(waitMs);
-                await page.screenshot({ path: `screenshots/${filename}`, fullPage: true });
+                await page.screenshot({ path: `screenshots/${filename}`, fullPage: false });
                 console.log(`captured: ${filename}`);
               } catch (e) {
                 console.error(`failed ${filename}:`, e.message);
@@ -77,9 +73,7 @@ jobs:
                 await page.close();
               }
             }
-
             await shot('http://127.0.0.1:5001/', '01-health.png');
-
             const fs = require('fs');
             const path = require('path');
             const htmlPath = path.resolve('interactive_voice_visualizer.html');
@@ -87,47 +81,75 @@ jobs:
               const page2 = await context.newPage();
               await page2.goto(`file://${htmlPath}`, { waitUntil: 'load' });
               await page2.waitForTimeout(2000);
-              await page2.screenshot({ path: 'screenshots/02-visualizer.png', fullPage: true });
+              await page2.screenshot({ path: 'screenshots/02-visualizer.png', fullPage: false });
               console.log('captured: 02-visualizer.png');
               await page2.close();
             }
-
             const page3 = await context.newPage();
             await page3.setContent(`
               <!DOCTYPE html><html><body style="background:#0d1117;color:#58a6ff;font-family:monospace;padding:24px">
               <h2 style="color:#c9d1d9">/api/lookup live test</h2>
               <pre id="out">loading...</pre>
               <script>
-                fetch('http://127.0.0.1:5001/api/lookup',{
-                  method:'POST',
-                  headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({query:'github.com'})
-                }).then(r=>r.json()).then(d=>{
-                  document.getElementById('out').textContent=JSON.stringify(d,null,2);
-                }).catch(e=>{
-                  document.getElementById('out').textContent='error: '+e;
-                });
+              fetch('http://127.0.0.1:5001/api/lookup',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({query:'github.com'})
+              }).then(r=>r.json()).then(d=>{
+                document.getElementById('out').textContent=JSON.stringify(d,null,2);
+              }).catch(e=>{
+                document.getElementById('out').textContent='error: '+e;
+              });
               <\/script>
               </body></html>
             `);
             await page3.waitForTimeout(4000);
-            await page3.screenshot({ path: 'screenshots/03-lookup-result.png', fullPage: true });
+            await page3.screenshot({ path: 'screenshots/03-lookup-result.png', fullPage: false });
             console.log('captured: 03-lookup-result.png');
             await page3.close();
-
             await browser.close();
           })();
           EOF
 
-      # ── 6. Upload screenshots as workflow artifact (backup) ────────
+      # ── 6. Compress screenshots with Pillow to stay under 65K b64 limit ──
+      - name: Compress screenshots
+        run: |
+          python - <<'EOF'
+          from PIL import Image
+          import os, pathlib
+
+          MAX_B64_BYTES = 18000  # ~18KB each => 3 shots = 54KB, well under 65536 limit
+          shots_dir = pathlib.Path('screenshots')
+
+          for png in sorted(shots_dir.glob('*.png')):
+              img = Image.open(png).convert('RGB')
+              # Resize to max 700px wide, keep aspect ratio
+              w, h = img.size
+              if w > 700:
+                  img = img.resize((700, int(h * 700 / w)), Image.LANCZOS)
+              # Save as JPEG with quality stepping down until small enough
+              out = png.with_suffix('.jpg')
+              quality = 72
+              while quality >= 20:
+                  img.save(out, 'JPEG', quality=quality, optimize=True)
+                  import base64
+                  b64_size = len(base64.b64encode(out.read_bytes()))
+                  if b64_size <= MAX_B64_BYTES:
+                      break
+                  quality -= 8
+              png.unlink()  # remove original PNG
+              print(f'{png.name} -> {out.name} ({b64_size} b64 bytes, quality={quality})')
+          EOF
+
+      # ── 7. Upload originals as artifact (full quality backup) ─────────
       - name: Upload screenshots artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pr-screenshots
+          name: pr-screenshots-${{ github.event.pull_request.number }}-${{ github.run_id }}
           path: screenshots/
           retention-days: 14
 
-      # ── 7. Post screenshots INLINE as PR comment ───────────────────
+      # ── 8. Post inline screenshots as PR comment ───────────────────
       - name: Post screenshot comment
         uses: actions/github-script@v7
         with:
@@ -137,32 +159,30 @@ jobs:
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
             const runId = context.runId;
-            const artifactUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
 
             const dir = 'screenshots';
             let files = [];
-            try { files = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort(); } catch {}
+            try { files = fs.readdirSync(dir).filter(f => f.endsWith('.jpg')).sort(); } catch {}
 
             const labels = {
-              '01-health.png':        '🟢 Flask `/health` — server up',
-              '02-visualizer.png':    '🎙️ Interactive Voice Visualizer',
-              '03-lookup-result.png': '🔍 `/api/lookup` live result (github.com)',
+              '01-health.jpg':        '🟢 Flask `/health`',
+              '02-visualizer.jpg':    '🎙️ Voice Visualizer',
+              '03-lookup-result.jpg': '🔍 `/api/lookup` (github.com)',
             };
 
             let body = `## 📸 PR Visual Preview\n\n`;
-            body += `> Commit \`${context.sha.slice(0,7)}\` — [full run](${artifactUrl})\n\n`;
+            body += `> Commit \`${context.sha.slice(0,7)}\` — [full run](${runUrl})\n\n`;
 
             if (files.length === 0) {
               body += '_No screenshots captured — check the workflow logs._';
             } else {
               for (const f of files) {
-                const label = labels[f] || f.replace(/^\d+-/, '').replace('.png', '');
-                const imgPath = path.join(dir, f);
-                const imgBuffer = fs.readFileSync(imgPath);
+                const label = labels[f] || f.replace(/^\d+-/, '').replace('.jpg', '');
+                const imgBuffer = fs.readFileSync(path.join(dir, f));
                 const b64 = imgBuffer.toString('base64');
-                // GitHub Markdown renders data URIs in <img> tags inside HTML blocks
-                body += `### ${label}\n\n`;
-                body += `<img src="data:image/png;base64,${b64}" alt="${label}" width="900" />\n\n`;
+                body += `**${label}**\n\n`;
+                body += `![${label}](data:image/jpeg;base64,${b64})\n\n`;
               }
             }
 
