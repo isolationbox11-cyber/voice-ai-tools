@@ -718,7 +718,7 @@ def analyze_pdf():
             pass
 
     if PyPDF2:
-        with contextlib.suppress(Exception):
+        try:
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
             result["pages"] = len(reader.pages)
             info = reader.metadata or {}
