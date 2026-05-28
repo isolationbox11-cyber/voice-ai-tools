@@ -113,7 +113,7 @@ class F5TTSEngine(TTSEngine):
             else:
                 logger.error(f"F5-TTS output file not found: {self.output_file}")
                 return None, "", "F5-TTS output file not found"
-        except Exception as e:
+        except Exception:
             logger.exception("F5-TTS process exception")
             return None, "", "F5-TTS process failed"
 
@@ -143,7 +143,7 @@ class EspeakEngine(TTSEngine):
                 check=True,
             )
             return result.stdout, "audio/wav", None
-        except Exception as e:
+        except Exception:
             logger.exception("Espeak failed")
             return None, "", "TTS synthesis failed"
 
