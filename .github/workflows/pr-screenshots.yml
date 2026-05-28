@@ -8,16 +8,17 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   screenshot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────
       - uses: actions/checkout@v4
 
-      # ── 2. Python + deps ───────────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -28,7 +29,6 @@ jobs:
           flask flask-cors flask-limiter python-dotenv \
           requests dnspython python-whois phonenumbers Pillow
 
-      # ── 3. Node + Playwright ───────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -37,7 +37,6 @@ jobs:
           npm install --no-save playwright
           npx playwright install --with-deps chromium
 
-      # ── 4. Start Flask server in background ───────────────────────
       - name: Start Flask server
         env:
           FLASK_ENV: development
@@ -49,7 +48,6 @@ jobs:
             sleep 1
           done
 
-      # ── 5. Take screenshots (viewport 900x600 for smaller file size) ────
       - name: Capture UI screenshots
         run: |
           mkdir -p screenshots
@@ -111,23 +109,20 @@ jobs:
           })();
           EOF
 
-      # ── 6. Compress screenshots with Pillow to stay under 65K b64 limit ──
       - name: Compress screenshots
         run: |
           python - <<'EOF'
           from PIL import Image
           import os, pathlib
 
-          MAX_B64_BYTES = 18000  # ~18KB each => 3 shots = 54KB, well under 65536 limit
+          MAX_B64_BYTES = 18000
           shots_dir = pathlib.Path('screenshots')
 
           for png in sorted(shots_dir.glob('*.png')):
               img = Image.open(png).convert('RGB')
-              # Resize to max 700px wide, keep aspect ratio
               w, h = img.size
               if w > 700:
                   img = img.resize((700, int(h * 700 / w)), Image.LANCZOS)
-              # Save as JPEG with quality stepping down until small enough
               out = png.with_suffix('.jpg')
               quality = 72
               while quality >= 20:
@@ -137,11 +132,10 @@ jobs:
                   if b64_size <= MAX_B64_BYTES:
                       break
                   quality -= 8
-              png.unlink()  # remove original PNG
+              png.unlink()
               print(f'{png.name} -> {out.name} ({b64_size} b64 bytes, quality={quality})')
           EOF
 
-      # ── 7. Upload originals as artifact (full quality backup) ─────────
       - name: Upload screenshots artifact
         uses: actions/upload-artifact@v4
         with:
@@ -149,7 +143,6 @@ jobs:
           path: screenshots/
           retention-days: 14
 
-      # ── 8. Post inline screenshots as PR comment ───────────────────
       - name: Post screenshot comment
         uses: actions/github-script@v7
         with:
@@ -186,7 +179,6 @@ jobs:
               }
             }
 
-            // Delete previous auto-preview comment to avoid spam
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number: prNumber });
             for (const c of comments.data) {
               if (c.body.startsWith('## 📸 PR Visual Preview')) {
