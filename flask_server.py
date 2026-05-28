@@ -281,8 +281,7 @@ def _validate_log_entry(data):
     if not isinstance(data, dict):
         return None, "Invalid JSON body"
     allowed_keys = {"action", "timestamp", "text"}
-    unknown_keys = set(data.keys()) - allowed_keys
-    if unknown_keys:
+    if unknown_keys := set(data.keys()) - allowed_keys:
         return None, f"Unknown fields: {', '.join(sorted(unknown_keys))}"
     action = data.get("action")
     text = data.get("text")
@@ -392,7 +391,7 @@ def _is_audio_upload(file_storage) -> bool:
 
 # ── voice-settings resolution ─────────────────────────────────────────
 def _resolve_voice_settings(call_type: str) -> dict:
-    try:
+    with contextlib.suppress(Exception):
         custom = importlib.import_module("custom_voice_config")
         fn = getattr(custom, "get_custom_voice_settings", None)
         if callable(fn):
@@ -404,9 +403,7 @@ def _resolve_voice_settings(call_type: str) -> dict:
                         custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE
                     )
                 return resolved
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         if callable(_default_voice_fn):
             result = _default_voice_fn(call_type or "LEGITIMATE")
             if isinstance(result, dict):
@@ -414,8 +411,6 @@ def _resolve_voice_settings(call_type: str) -> dict:
                 if not resolved.get("voice_id"):
                     resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
                 return resolved
-    except Exception:
-        pass
     return {"voice_id": _GEMINI_DEFAULT_VOICE}
 
 
@@ -426,6 +421,8 @@ def api_docs():
     try:
         with open("openapi.json", "r") as f:
             return jsonify(json.load(f))
+    except FileNotFoundError:
+        return jsonify({"error": "API documentation not found"}), 404
     except Exception:
         return jsonify({"error": "API documentation not available"}), 404
 
@@ -467,30 +464,24 @@ def health():
             pass
 
     # Voice model statistics
-    try:
+    with contextlib.suppress(Exception):
         embedding_dir = Path("voice_embeddings")
         if embedding_dir.exists():
             embeddings = list(embedding_dir.glob("*.json"))
             health_data["voice_embeddings_count"] = len(embeddings)
-    except Exception:
-        pass
 
     # Sample files count
-    try:
+    with contextlib.suppress(Exception):
         samples = list(SAMPLES_DIR.glob("*")) if SAMPLES_DIR.exists() else []
         health_data["voice_samples_count"] = len([f for f in samples if f.is_file()])
-    except Exception:
-        pass
 
     # Coqui model status
-    try:
+    with contextlib.suppress(Exception):
         import voice_training
 
         health_data["coqui_model_available"] = (
             voice_training._get_coqui_model() is not None
         )
-    except Exception:
-        health_data["coqui_model_available"] = False
 
     # Optional dependencies status
     health_data["optional_deps"] = {
@@ -554,11 +545,10 @@ def presets():
     if auth_error:
         return auth_error
     if request.method == "GET":
-        try:
+        with contextlib.suppress(Exception):
             with open(PRESET_PATH) as f:
                 return jsonify(json.load(f))
-        except Exception:
-            return jsonify({"presets": []})
+        return jsonify({"presets": []})
     data = request.get_json(silent=True)
     if not data or not data.get("name"):
         return jsonify({"error": "Preset needs a name"}), 400
@@ -588,21 +578,18 @@ def log_endpoint():
     if auth_error:
         return auth_error
     if request.method == "GET":
-        try:
+        with contextlib.suppress(Exception):
             with open(LOG_PATH) as f:
                 return jsonify(json.load(f))
-        except Exception:
-            return jsonify({"entries": []})
+        return jsonify({"entries": []})
     entry, error = _validate_log_entry(request.get_json(silent=True))
     if error:
         return jsonify({"error": error}), 400
     entries = []
-    if LOG_PATH.exists():
-        try:
+    with contextlib.suppress(Exception):
+        if LOG_PATH.exists():
             with open(LOG_PATH) as f:
                 entries = json.load(f).get("entries", [])
-        except Exception:
-            pass
     entries.insert(0, entry)
     if len(entries) > 500:
         entries = entries[:500]
@@ -731,7 +718,7 @@ def analyze_pdf():
             pass
 
     if PyPDF2:
-        try:
+        with contextlib.suppress(Exception):
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
             result["pages"] = len(reader.pages)
             info = reader.metadata or {}
