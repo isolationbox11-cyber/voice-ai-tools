@@ -14,8 +14,29 @@ Env vars:
 """
 
 # v2 - security hardened
-import os, io, re, json, time, uuid, importlib, sys, threading
+import os
+import io
+import re
+import json
+import time
+import importlib
+import sys
+import threading
+import logging
+import hmac
+import hashlib
 from pathlib import Path
+from dotenv import load_dotenv
+
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+load_dotenv()
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 # Optional monitoring dependency
 try:
@@ -24,18 +45,6 @@ try:
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
-
-# Crypto dependencies (always available in Python standard library)
-import hmac
-import hashlib
-from dotenv import load_dotenv
-
-load_dotenv()
-
-from flask import Flask, request, jsonify, Response, send_file
-from flask_cors import CORS
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 
 # ── optional heavy deps ───────────────────────────────────────────────
 try:
@@ -601,6 +610,36 @@ def _filter_shodan_response(payload):
     return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
 
 
+def _filter_lookup_result(result):
+    """Filter lookup results to remove sensitive information."""
+    if not isinstance(result, dict):
+        return {}
+
+    # Define fields that should not be exposed
+    sensitive_fields = {
+        "api_key",
+        "token",
+        "password",
+        "secret",
+        "private_key",
+        "credentials",
+        "auth",
+        "authorization",
+    }
+
+    # Recursively filter the result
+    def filter_dict(d):
+        if not isinstance(d, dict):
+            return d
+        return {
+            k: filter_dict(v) if isinstance(v, dict) else v
+            for k, v in d.items()
+            if not any(sensitive in k.lower() for sensitive in sensitive_fields)
+        }
+
+    return filter_dict(result)
+
+
 # ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
 @limiter.limit("10 per minute")
@@ -692,7 +731,7 @@ def analyze_pdf():
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
             return jsonify(_filter_lookup_result(result))
         except Exception:
-            app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
+            logger.exception("PyPDF2 parsing failed in /analyze_pdf")
             return jsonify({"error": "Failed to analyze PDF"}), 500
 
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
@@ -756,7 +795,7 @@ def train():
         manifest["status"] = "samples_saved"
         manifest["note"] = "voice_training.py not found — samples saved only"
     except Exception:
-        app.logger.exception("Training failed")
+        logger.exception("Training failed")
         manifest["status"] = "training_failed"
         manifest["error"] = "Training failed. Check server logs."
     with open(MODEL_DIR / "manifest.json", "w") as mf:
