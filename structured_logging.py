@@ -41,10 +41,26 @@ class JSONFormatter(logging.Formatter):
         # Add custom attributes if present
         for key, value in record.__dict__.items():
             if key not in {
-                "name", "msg", "args", "levelname", "levelno", "pathname",
-                "filename", "module", "lineno", "funcName", "created",
-                "msecs", "relativeCreated", "thread", "threadName",
-                "processName", "process", "message", "exc_info", "exc_text"
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "message",
+                "exc_info",
+                "exc_text",
             }:
                 log_data[key] = value
 
@@ -90,7 +106,9 @@ class MetricsCollector:
 
             # Calculate statistics for timing metrics
             for key, value in self.metrics.items():
-                if isinstance(value, list) and all(isinstance(x, (int, float)) for x in value):
+                if isinstance(value, list) and all(
+                    isinstance(x, (int, float)) for x in value
+                ):
                     if len(value) > 0:
                         result[f"{key}_avg"] = sum(value) / len(value)
                         result[f"{key}_min"] = min(value)
@@ -137,12 +155,12 @@ class RequestMetrics:
                 # Update metrics
                 endpoint = request_info["endpoint"]
                 self.metrics.increment(f"requests_{endpoint}")
-                self.metrics.increment(f"requests_total")
-                
+                self.metrics.increment("requests_total")
+
                 if status_code >= 400:
                     self.metrics.increment(f"errors_{endpoint}")
                     self.metrics.increment("errors_total")
-                
+
                 self.metrics.timing(f"duration_{endpoint}", duration)
                 self.metrics.timing("duration_all", duration)
 
@@ -163,7 +181,7 @@ def track_function_call(metric_name: str, metrics: MetricsCollector):
         duration = time.time() - start_time
         metrics.timing(metric_name, duration)
         metrics.increment(f"{metric_name}_success")
-    except Exception as e:
+    except Exception:
         duration = time.time() - start_time
         metrics.timing(metric_name, duration)
         metrics.increment(f"{metric_name}_error")
@@ -172,6 +190,7 @@ def track_function_call(metric_name: str, metrics: MetricsCollector):
 
 def log_function_call(metric_name: str, metrics: MetricsCollector):
     """Decorator to log and track function calls."""
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -179,16 +198,17 @@ def log_function_call(metric_name: str, metrics: MetricsCollector):
                 logger = logging.getLogger(func.__module__)
                 logger.info(
                     f"Calling function: {func.__name__}",
-                    extra={"function": func.__name__, "metric": metric_name}
+                    extra={"function": func.__name__, "metric": metric_name},
                 )
                 return func(*args, **kwargs)
+
         return wrapper
+
     return decorator
 
 
 def setup_structured_logging(
-    log_level: str = "INFO",
-    log_file: Optional[str] = None
+    log_level: str = "INFO", log_file: Optional[str] = None
 ) -> logging.Logger:
     """
     Setup structured JSON logging for the application.
@@ -241,32 +261,34 @@ if __name__ == "__main__":
     """Test structured logging and metrics."""
     print("Testing structured logging and metrics...")
     print("=" * 50)
-    
+
     # Setup logging
     setup_structured_logging("INFO")
     logger = logging.getLogger(__name__)
-    
+
     # Test JSON logging
     logger.info("Test info message", extra={"custom_field": "custom_value"})
     logger.warning("Test warning message")
     logger.error("Test error message")
-    
+
     print("✓ Structured logging works")
-    
+
     # Test metrics
     metrics = MetricsCollector()
     metrics.increment("test_counter", 5)
     metrics.timing("test_timing", 1.5)
     metrics.gauge("test_gauge", 42.0)
-    
+
     metric_data = metrics.get_metrics()
     print(f"✓ Metrics collection works: {json.dumps(metric_data, indent=2)}")
-    
+
     # Test request metrics
     request_metrics.track_request("/test", "GET")
     time.sleep(0.1)
     request_metrics.track_response("test_request_id", 200)
-    
-    print(f"✓ Request metrics work: {json.dumps(request_metrics.get_summary(), indent=2)}")
-    
+
+    print(
+        f"✓ Request metrics work: {json.dumps(request_metrics.get_summary(), indent=2)}"
+    )
+
     print("\nAll logging and metrics tests passed!")
