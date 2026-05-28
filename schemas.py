@@ -261,8 +261,8 @@ def validate_request_schema(schema_class: type[BaseModel], data: dict) -> dict:
     """
     try:
         return schema_class(**data).model_dump()
-    except Exception as e:
-        raise ValueError(f"Validation error: {str(e)}")
+    except Exception as exc:
+        raise ValueError(f"Validation error: {str(exc)}") from exc
 
 
 if __name__ == "__main__":
