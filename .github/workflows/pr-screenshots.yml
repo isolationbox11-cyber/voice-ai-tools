@@ -6,7 +6,7 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write   # needed to post the comment
+  pull-requests: write
 
 jobs:
   screenshot:
@@ -22,18 +22,16 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install Python deps
         run: |
           pip install --quiet \
-            flask flask-cors flask-limiter python-dotenv \
-            requests dnspython python-whois phonenumbers
+          flask flask-cors flask-limiter python-dotenv \
+          requests dnspython python-whois phonenumbers
 
       # ── 3. Node + Playwright ───────────────────────────────────────
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-
       - name: Install Playwright + Chromium
         run: |
           npm install --no-save playwright
@@ -57,13 +55,11 @@ jobs:
           mkdir -p screenshots
           node - <<'EOF'
           const { chromium } = require('playwright');
-
           (async () => {
             const browser = await chromium.launch();
             const context = await browser.newContext({
               viewport: { width: 1280, height: 800 },
             });
-
             async function shot(url, filename, waitMs = 1500) {
               const page = await context.newPage();
               try {
@@ -77,9 +73,7 @@ jobs:
                 await page.close();
               }
             }
-
             await shot('http://127.0.0.1:5001/', '01-health.png');
-
             const fs = require('fs');
             const path = require('path');
             const htmlPath = path.resolve('interactive_voice_visualizer.html');
@@ -91,22 +85,21 @@ jobs:
               console.log('captured: 02-visualizer.png');
               await page2.close();
             }
-
             const page3 = await context.newPage();
             await page3.setContent(`
               <!DOCTYPE html><html><body style="background:#0d1117;color:#58a6ff;font-family:monospace;padding:24px">
               <h2 style="color:#c9d1d9">/api/lookup live test</h2>
               <pre id="out">loading...</pre>
               <script>
-                fetch('http://127.0.0.1:5001/api/lookup',{
-                  method:'POST',
-                  headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({query:'github.com'})
-                }).then(r=>r.json()).then(d=>{
-                  document.getElementById('out').textContent=JSON.stringify(d,null,2);
-                }).catch(e=>{
-                  document.getElementById('out').textContent='error: '+e;
-                });
+              fetch('http://127.0.0.1:5001/api/lookup',{
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({query:'github.com'})
+              }).then(r=>r.json()).then(d=>{
+                document.getElementById('out').textContent=JSON.stringify(d,null,2);
+              }).catch(e=>{
+                document.getElementById('out').textContent='error: '+e;
+              });
               <\/script>
               </body></html>
             `);
@@ -114,30 +107,30 @@ jobs:
             await page3.screenshot({ path: 'screenshots/03-lookup-result.png', fullPage: true });
             console.log('captured: 03-lookup-result.png');
             await page3.close();
-
             await browser.close();
           })();
           EOF
 
-      # ── 6. Upload screenshots as workflow artifact (backup) ────────
+      # ── 6. Upload screenshots as workflow artifact ─────────────────
       - name: Upload screenshots artifact
+        id: upload
         uses: actions/upload-artifact@v4
         with:
-          name: pr-screenshots
+          name: pr-screenshots-${{ github.event.pull_request.number }}-${{ github.run_id }}
           path: screenshots/
           retention-days: 14
 
-      # ── 7. Post screenshots INLINE as PR comment ───────────────────
+      # ── 7. Post comment with artifact link ─────────────────────────
       - name: Post screenshot comment
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const path = require('path');
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
             const runId = context.runId;
-            const artifactUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const artifactUrl = `${runUrl}#artifacts`;
 
             const dir = 'screenshots';
             let files = [];
@@ -150,19 +143,16 @@ jobs:
             };
 
             let body = `## 📸 PR Visual Preview\n\n`;
-            body += `> Commit \`${context.sha.slice(0,7)}\` — [full run](${artifactUrl})\n\n`;
+            body += `> Commit \`${context.sha.slice(0,7)}\` — [full run](${runUrl})\n\n`;
 
             if (files.length === 0) {
               body += '_No screenshots captured — check the workflow logs._';
             } else {
+              body += `Screenshots are attached as a workflow artifact — [**download them here**](${artifactUrl}).\n\n`;
+              body += `| # | View |\n|---|---|\n`;
               for (const f of files) {
                 const label = labels[f] || f.replace(/^\d+-/, '').replace('.png', '');
-                const imgPath = path.join(dir, f);
-                const imgBuffer = fs.readFileSync(imgPath);
-                const b64 = imgBuffer.toString('base64');
-                // GitHub Markdown renders data URIs in <img> tags inside HTML blocks
-                body += `### ${label}\n\n`;
-                body += `<img src="data:image/png;base64,${b64}" alt="${label}" width="900" />\n\n`;
+                body += `| ${label} | [${f}](${artifactUrl}) |\n`;
               }
             }
 
