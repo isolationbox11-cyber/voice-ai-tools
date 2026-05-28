@@ -36,8 +36,11 @@ def _get_client():
             if _genai_client is None:
                 try:
                     from google import genai
+
                     api_key = os.environ.get("GOOGLE_API_KEY")
-                    _genai_client = genai.Client(api_key=api_key) if api_key else genai.Client()
+                    _genai_client = (
+                        genai.Client(api_key=api_key) if api_key else genai.Client()
+                    )
                 except Exception as e:
                     logger.error("Failed to create GenAI client: %s", e)
                     raise
@@ -63,17 +66,20 @@ def synthesize_speech(
         return None, "", "Empty text provided", text
 
     if len(text) > MAX_TEXT_LENGTH:
-        logger.warning("Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH)
+        logger.warning(
+            "Text truncated from %d to %d characters", len(text), MAX_TEXT_LENGTH
+        )
         text = text[:MAX_TEXT_LENGTH]
 
     voice_id = (voice_settings.get("voice_id") or "Kore").strip()
-    engine   = (voice_settings.get("engine") or "").strip()
+    engine = (voice_settings.get("engine") or "").strip()
 
     # ── Path A: Coqui embedding (trained via /train) ───────────────────────
     if voice_id.startswith("local_voice_"):
         logger.info("Path A — Coqui embedding for voice: %s", voice_id)
         try:
             from voice_training import synthesize_with_cloned_voice
+
             audio_bytes = synthesize_with_cloned_voice(text, voice_id)
             if audio_bytes:
                 if debug_output_path:
@@ -94,6 +100,7 @@ def synthesize_speech(
         # First, try to get the WAV path from custom_voice_config
         try:
             import importlib
+
             cvc = importlib.import_module("custom_voice_config")
             samples = getattr(cvc, "CUSTOM_VOICE_SAMPLES", [])
             if samples:
@@ -103,11 +110,14 @@ def synthesize_speech(
 
         # Fallback: check voice_settings itself for a wav_path key
         if not wav_path:
-            wav_path = voice_settings.get("wav_path") or voice_settings.get("sample_path")
+            wav_path = voice_settings.get("wav_path") or voice_settings.get(
+                "sample_path"
+            )
 
         if wav_path:
             try:
                 from voice_training import synthesize_from_wav_reference
+
                 audio_bytes = synthesize_from_wav_reference(text, wav_path)
                 if audio_bytes:
                     if debug_output_path:
@@ -118,13 +128,16 @@ def synthesize_speech(
             except Exception as e:
                 logger.error("Path B WAV reference error: %s", e)
         else:
-            logger.warning("Path B: no WAV path found in custom_voice_config or voice_settings — falling back.")
+            logger.warning(
+                "Path B: no WAV path found in custom_voice_config or voice_settings — falling back."
+            )
 
         voice_id = "Kore"  # fall through to Gemini
 
     # ── Path C: Gemini TTS (prebuilt / stock voices) ───────────────────────
     try:
         from google.genai import types as genai_types
+
         client = _get_client()
 
         if voice_id and voice_id.lower() != "default":
@@ -135,9 +148,7 @@ def synthesize_speech(
             )
         else:
             voice_cfg = genai_types.VoiceConfig(
-                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
-                    voice_name="Kore"
-                )
+                prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(voice_name="Kore")
             )
 
         response = client.models.generate_content(
@@ -161,6 +172,6 @@ def synthesize_speech(
 
         return audio_bytes, mime_type, None, text
 
-    except Exception as e:
+    except Exception:
         logger.exception("TTS synthesis failed")
-        return None, "", f"TTS synthesis failed: {e}", text
+        return None, "", "TTS synthesis failed", text
