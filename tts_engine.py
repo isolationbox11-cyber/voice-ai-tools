@@ -115,7 +115,7 @@ class F5TTSEngine(TTSEngine):
                 return None, "", "F5-TTS output file not found"
         except Exception as e:
             logger.exception("F5-TTS process exception")
-            return None, "", str(e)
+            return None, "", "F5-TTS process failed"
 
 
 class GoogleGenAIEngine(TTSEngine):
@@ -145,7 +145,7 @@ class EspeakEngine(TTSEngine):
             return result.stdout, "audio/wav", None
         except Exception as e:
             logger.exception("Espeak failed")
-            return None, "", str(e)
+            return None, "", "TTS synthesis failed"
 
 
 def synthesize_speech(
