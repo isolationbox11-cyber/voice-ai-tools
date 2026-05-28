@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Voice AI TTS",
+  "version": "1.0.0",
+  "description": "Browser TTS playback for voice-ai-tools via local Flask server.",
+  "permissions": ["storage", "offscreen"],
+  "host_permissions": ["http://127.0.0.1:5100/*", "http://localhost:5100/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Voice AI TTS",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

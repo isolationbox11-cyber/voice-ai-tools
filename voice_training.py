@@ -343,8 +343,7 @@ def synthesize_from_wav_reference(text: str, wav_path: str) -> bytes | None:
         import tempfile
         import soundfile as sf
 
-        # tts_to_file writes to a path; we use a temp file then read bytes back
-        tmp_path = None  # Initialize before try block to avoid NameError in except
+        tmp_path = None
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
 
@@ -359,7 +358,6 @@ def synthesize_from_wav_reference(text: str, wav_path: str) -> bytes | None:
         return wav_bytes
     except Exception as e:
         print(f"synthesize_from_wav_reference failed: {e}")
-        # Clean up temp file if it exists
         if tmp_path:
             try:
                 Path(tmp_path).unlink(missing_ok=True)

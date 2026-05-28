@@ -1,121 +1,174 @@
-# voice-ai-tools
-<!-- screenshot-test -->
+# Voice AI Tools
 
-A locally-run Flask backend and Chrome extension for voice synthesis, voice cloning, OSINT lookups, and PDF forensics. Powered by Google Gemini for TTS and Shodan for threat intelligence.
+Synthesized speech in your cloned/custom voice – with two integration paths:
 
-## Features
+1. **WebSocket visualizer** – Python backend + browser visualizer connected over a local WebSocket.
+2. **Flask + Chrome extension** – local HTTP API consumed by a Chrome popup.
 
-- **Text-to-Speech** — Google Gemini-backed synthesis with configurable voice presets and call-type routing
-- **Voice Cloning / Training** — Upload audio samples to train a custom voice model
-- **OSINT Lookup** — Domain, IP, and phone number intelligence via `lookup_engine.py`
-- **Shodan Integration** — Live host threat data proxied through `/shodan`
-- **PDF Forensics** — Extract metadata, links, IPs, and detect suspicious patterns from uploaded PDFs
-- **Chrome Extension** — Browser-side UI in `/extension` that connects to the local server
-- **Session Logging** — Log and replay voice interactions via `/log`
+Both paths share the same `tts_engine.py` TTS core and the optional `custom_voice_config.py` custom-voice profile.
 
-## Quick Start
+---
+
+## Architecture
+
+```
+voice_training.py       →  custom_voice_config.py  (your voice ID & settings)
+tts_engine.py           →  synthesize_speech()       (Google GenAI TTS, in-memory)
+
+── WebSocket path ─────────────────────────────────────────────────────────────
+voice_visualizer_integration.py  →  ws://localhost:8765
+interactive_voice_visualizer.html  (browser client)
+
+── Flask + Chrome path ────────────────────────────────────────────────────────
+flask_server.py         →  http://127.0.0.1:5100/tts
+extension/              →  Chrome popup (UI + audio playback)
+```
+
+---
+
+## Prerequisites
+
+- Python 3.10+
+- Google Cloud project with **Gemini API** (or AI Studio) access
+- Google Chrome *(only for the Chrome extension path)*
+
+---
+
+## Quick start
+
+### 1. Install dependencies
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/isolationbox11-cyber/voice-ai-tools.git
-cd voice-ai-tools
-
-# 2. Create and activate a virtual environment
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
+```
 
-# 4. Configure environment variables
-cp .env.example .env
-# Edit .env and fill in your API keys
+### 2. Set Google API credentials
 
-# 5. Start the server
+```bash
+# AI Studio key (simplest)
+export GOOGLE_API_KEY="your-google-api-key"
+
+# ── or ──  Application Default Credentials (gcloud CLI)
+# gcloud auth application-default login
+```
+
+### 3. (Optional) Train your custom voice
+
+Record the 10 training phrases listed by the script and save them as
+`voice_samples/voice_sample_01.wav` … `voice_sample_10.wav`, then run:
+
+```bash
+python voice_training.py
+```
+
+This writes `custom_voice_config.py` containing your `CUSTOM_VOICE_ID`.
+Both server paths automatically detect and use this file when present.
+If you skip this step the system falls back to the default Gemini voice (`Kore`).
+
+---
+
+## Path A – WebSocket visualizer
+
+### 4a. Run the backend server
+
+```bash
+python voice_visualizer_integration.py
+```
+
+The WebSocket server starts on `ws://localhost:8765`.
+
+### 5a. Open the visualizer
+
+Open `interactive_voice_visualizer.html` in your browser (double-click the file, or serve it with any HTTP server).
+
+The page connects automatically to the local WebSocket server.
+
+### 6a. Test speech synthesis
+
+- Click **▶ Start Listening** to begin voice-level simulation.
+- Click **🚨 Test Scam** or **✅ Test Legit** to trigger a synthesized speech response.
+
+Audio is generated on the Python side, base64-encoded, sent over the WebSocket, and played via `<audio>` in the browser.
+Falls back to `window.speechSynthesis` when no audio payload is present.
+
+---
+
+## Path B – Flask + Chrome extension
+
+### 4b. Set the shared secret token
+
+```bash
+export VOICE_SERVER_TOKEN="choose-a-strong-random-secret"
+```
+
+> If `VOICE_SERVER_TOKEN` is not set, the server prints a warning and
+> accepts all requests.  **Always set it on a multi-user or networked machine.**
+
+### 5b. Start the Flask server
+
+```bash
 python flask_server.py
-# Server runs at http://127.0.0.1:5001
 ```
 
-## Environment Variables
+The server binds to `127.0.0.1:5100` by default.  Override with:
 
-See [`.env.example`](.env.example) for the full list. The only required variable is:
+```bash
+HOST=127.0.0.1 PORT=5100 python flask_server.py
+```
 
-| Variable | Required | Description |
+### 6b. Load the Chrome extension
+
+1. Open Chrome → `chrome://extensions/`
+2. Enable **Developer mode** (top-right toggle)
+3. Click **Load unpacked** and select the `extension/` folder
+
+### 7b. Configure the extension
+
+1. Click the **Voice AI TTS** icon in the Chrome toolbar
+2. Click **⚙️ Settings**
+3. Set **Server URL** to `http://127.0.0.1:5100` (default)
+4. Set **Token** to the same value as `VOICE_SERVER_TOKEN`
+5. Click **💾 Save Settings**
+
+### 8b. Test
+
+- Type any text in the popup and click **▶ Speak**
+- Click **🚨 Test Scam** or **✅ Test Legitimate** for pre-set demo phrases
+
+---
+
+## Environment variables (Flask server)
+
+| Variable | Default | Description |
 |---|---|---|
-| `GOOGLE_API_KEY` | ✅ Yes | Gemini API key for TTS |
-| `VOICE_SERVER_TOKEN` | Recommended | Auth token sent in `X-Voice-Token` header |
-| `SHODAN_API_KEY` | Optional | Enables `/shodan` endpoint |
-| `ALLOWED_ORIGINS` | Optional | Extra CORS origins (e.g. Chrome extension ID) |
-| `PORT` | Optional | Bind port (default: `5001`) |
-| `FLASK_ENV` | Optional | Set to `production` to enforce auth token |
+| `GOOGLE_API_KEY` | *(required)* | Google GenAI API key |
+| `VOICE_SERVER_TOKEN` | *(empty = open)* | Shared secret for `X-Voice-Token` header |
+| `HOST` | `127.0.0.1` | Bind host |
+| `PORT` | `5100` | Bind port |
+| `ALLOWED_ORIGINS` | *(empty)* | Comma-separated extra CORS origins |
 
-## API Endpoints
+---
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Server status and config check |
-| `POST` | `/tts` | Synthesize speech from text |
-| `GET/POST` | `/presets` | Read or save voice presets |
-| `GET/POST` | `/log` | Read or append session log entries |
-| `POST` | `/log/clear` | Clear all session logs |
-| `GET` | `/shodan?ip=` | Shodan host lookup (requires `SHODAN_API_KEY`) |
-| `POST` | `/analyze_pdf` | Extract metadata, IPs, links from a PDF |
-| `POST` | `/train` | Upload audio samples for voice training |
-| `GET` | `/model_status` | Check voice model training status |
-| `POST` | `/api/lookup` | OSINT lookup for domain/IP/phone |
+## Privacy & security
 
-All endpoints except `/health` require the `X-Voice-Token` header when `VOICE_SERVER_TOKEN` is set.
+- Both servers bind to `127.0.0.1` only – not reachable from the network.
+- The `X-Voice-Token` header (Flask path) prevents other local pages from calling the API.
+- Audio is synthesized in-memory and never written to disk unless you pass `debug_output_path` to `tts_engine.synthesize_speech()`.
+- Input text is truncated to **1,000 characters** to prevent runaway requests.
+- `custom_voice_config.py` and `voice_samples/` are excluded from git via `.gitignore`.
 
-## Security Notes
+---
 
-- The server binds to `127.0.0.1` only by default. Set `ALLOW_NETWORK_BINDING=1` only if you understand the risks.
-- Always set `VOICE_SERVER_TOKEN` in any non-local deployment.
-- Private/loopback IPs are blocked on `/api/lookup` to prevent SSRF.
-- Error messages are sanitized before returning to clients — API keys and stack traces are never leaked.
-- Consider enabling `ENABLE_REQUEST_SIGNING=true` for replay protection in production.
+## File reference
 
-## Production Deployment
-
-For production deployment, see [DEPLOYMENT.md](DEPLOYMENT.md) which covers:
-
-- Environment configuration best practices
-- Security hardening
-- Deployment options (systemd, Docker, cloud)
-- Monitoring and maintenance
-- Backup and recovery procedures
-- Troubleshooting common issues
-
-## Requirements
-
-See [`requirements.txt`](requirements.txt). Key dependencies:
-
-- `flask`, `flask-cors`, `flask-limiter`
-- `google-genai` — Gemini TTS
-- `pdfplumber`, `PyPDF2` — PDF analysis
-- `dnspython`, `python-whois`, `phonenumbers` — OSINT lookups
-- `torch` — voice model training
-- `python-dotenv`
-
-All heavy dependencies degrade gracefully — the server boots even if optional packages are missing.
-
-## Project Structure
-
-```
-voice-ai-tools/
-├── flask_server.py               # Main Flask backend
-├── tts_engine.py                 # Gemini TTS synthesis
-├── voice_training.py             # Voice model training
-├── voice_visualizer_integration.py
-├── voice_visualizer_standalone.py
-├── voice_config.py               # Voice context routing
-├── lookup_engine.py              # OSINT lookup engine
-├── interactive_voice_visualizer.html
-├── extension/                    # Chrome extension
-├── requirements.txt
-├── .env.example
-└── pytest.ini
-```
-
-## License
-
-Private repository — all rights reserved.
+| File | Purpose |
+|------|---------|
+| `voice_training.py` | Record voice samples → train custom voice → write `custom_voice_config.py` |
+| `voice_config.py` | Default voice presets per call-type |
+| `tts_engine.py` | Google GenAI TTS synthesis helper (shared by both paths) |
+| `flask_server.py` | Local HTTP TTS API (Path B) |
+| `extension/` | Chrome extension popup + offscreen audio player (Path B) |
+| `voice_visualizer_integration.py` | WebSocket server + `VoiceVisualizerBridge` (Path A) |
+| `voice_visualizer_standalone.py` | Lightweight standalone version (no AI dependencies) |
+| `interactive_voice_visualizer.html` | Browser visualizer & audio player (Path A) |
+| `requirements.txt` | Python dependencies |

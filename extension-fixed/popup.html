@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice AI Tools</title>
+    <style>
+      :root {
+        --bg: #0b1a15;
+        --accent: #4cc9f0;
+        --accent2: #7b2fbe;
+        --warn: #f72585;
+        --ok: #06d6a0;
+        --text: #e0e0e0;
+        --panel: rgba(15, 61, 62, 0.6);
+        --glow: 0 0 20px rgba(76, 201, 240, 0.3);
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background:
+          radial-gradient(
+            ellipse at 50% 30%,
+            rgba(15, 61, 62, 0.5) 0%,
+            transparent 70%
+          ),
+          #0b1a15;
+        color: var(--text);
+        font-family: system-ui, sans-serif;
+        width: 400px;
+        min-height: 580px;
+        padding: 0;
+      }
+      header {
+        padding: 16px 20px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      h1 {
+        font-size: 1rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent);
+        text-shadow: var(--glow);
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 8px var(--ok);
+        animation: pulse 2s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .tabs {
+        display: flex;
+        margin: 14px 20px 0;
+        border-bottom: 1px solid rgba(76, 201, 240, 0.2);
+      }
+      .tab {
+        flex: 1;
+        padding: 8px 0;
+        text-align: center;
+        font-size: 0.65rem;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+        cursor: pointer;
+        color: rgba(224, 224, 224, 0.4);
+        border-bottom: 2px solid transparent;
+        transition: all 0.2s;
+      }
+      .tab.active {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+        text-shadow: 0 0 10px rgba(76, 201, 240, 0.6);
+      }
+      .tab:hover {
+        color: var(--accent);
+      }
+      .panel {
+        display: none;
+        padding: 14px 20px 20px;
+      }
+      .panel.active {
+        display: block;
+      }
+      .visualizer {
+        width: 100%;
+        height: 56px;
+        background: var(--panel);
+        border-radius: 8px;
+        overflow: hidden;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 2px;
+        padding: 4px;
+      }
+      .bar {
+        width: 4px;
+        border-radius: 2px;
+        background: var(--accent);
+        min-height: 4px;
+        transition: height 0.1s;
+      }
+      .visualizer .bar:nth-child(1) {
+        height: 12px;
+      }
+      .visualizer .bar:nth-child(2) {
+        height: 24px;
+      }
+      .visualizer .bar:nth-child(3) {
+        height: 18px;
+      }
+      .visualizer .bar:nth-child(4) {
+        height: 36px;
+      }
+      .visualizer .bar:nth-child(5) {
+        height: 28px;
+      }
+      .visualizer .bar:nth-child(6) {
+        height: 44px;
+      }
+      .visualizer .bar:nth-child(7) {
+        height: 32px;
+      }
+      .visualizer .bar:nth-child(8) {
+        height: 20px;
+      }
+      .visualizer .bar:nth-child(9) {
+        height: 38px;
+      }
+      .visualizer .bar:nth-child(10) {
+        height: 14px;
+      }
+      .visualizer .bar:nth-child(11) {
+        height: 26px;
+      }
+      .visualizer .bar:nth-child(12) {
+        height: 50px;
+      }
+      .visualizer .bar:nth-child(13) {
+        height: 30px;
+      }
+      .visualizer .bar:nth-child(14) {
+        height: 16px;
+      }
+      .visualizer .bar:nth-child(15) {
+        height: 22px;
+      }
+      textarea {
+        width: 100%;
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.25);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 0.85rem;
+        padding: 10px;
+        resize: none;
+        outline: none;
+        height: 76px;
+        margin-bottom: 10px;
+      }
+      textarea:focus {
+        border-color: var(--accent);
+        box-shadow: var(--glow);
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      select,
+      input[type="text"] {
+        flex: 1;
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.2);
+        border-radius: 6px;
+        color: var(--text);
+        font-size: 0.8rem;
+        padding: 7px 10px;
+        outline: none;
+      }
+      select:focus,
+      input:focus {
+        border-color: var(--accent);
+      }
+      .btn {
+        padding: 9px 18px;
+        border-radius: 6px;
+        border: none;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .btn-primary {
+        background: linear-gradient(135deg, #4cc9f0, #7b2fbe);
+        color: #fff;
+        width: 100%;
+        margin-bottom: 8px;
+      }
+      .btn-primary:hover {
+        opacity: 0.85;
+        transform: translateY(-1px);
+        box-shadow: var(--glow);
+      }
+      .btn-primary:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        transform: none;
+      }
+      .btn-sm {
+        flex: 1;
+        background: rgba(76, 201, 240, 0.1);
+        color: var(--accent);
+        border: 1px solid rgba(76, 201, 240, 0.25);
+      }
+      .btn-sm:hover {
+        background: rgba(76, 201, 240, 0.2);
+      }
+      .btn-warn {
+        background: rgba(247, 37, 133, 0.15);
+        color: var(--warn);
+        border: 1px solid rgba(247, 37, 133, 0.3);
+      }
+      .btn-ok {
+        background: rgba(6, 214, 160, 0.15);
+        color: var(--ok);
+        border: 1px solid rgba(6, 214, 160, 0.3);
+      }
+      .section-label {
+        font-size: 0.68rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(224, 224, 224, 0.4);
+        margin-bottom: 6px;
+      }
+      /* VOICE TAB */
+      .voice-mode-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      .mode-btn {
+        flex: 1;
+        padding: 7px;
+        border-radius: 6px;
+        border: 1px solid rgba(76, 201, 240, 0.2);
+        background: transparent;
+        color: rgba(224, 224, 224, 0.4);
+        font-size: 0.72rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-transform: uppercase;
+      }
+      .mode-btn.active {
+        background: rgba(76, 201, 240, 0.15);
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+      .voice-status {
+        font-size: 0.72rem;
+        color: rgba(224, 224, 224, 0.45);
+        text-align: center;
+        margin-bottom: 8px;
+        min-height: 16px;
+      }
+      .suggested-phrases {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .phrase-btn {
+        flex: 1;
+        min-width: 120px;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid rgba(76, 201, 240, 0.2);
+        background: rgba(76, 201, 240, 0.08);
+        color: var(--accent);
+        font-size: 0.7rem;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        cursor: pointer;
+        transition: all 0.2s;
+        text-transform: uppercase;
+      }
+      .phrase-btn:hover {
+        background: rgba(76, 201, 240, 0.15);
+        border-color: var(--accent);
+        transform: translateY(-1px);
+      }
+      /* KARAOKE TRAIN TAB */
+      .karaoke-mood {
+        width: 100%;
+        height: 72px;
+        border-radius: 10px;
+        margin-bottom: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 16px;
+        transition: all 0.4s;
+        position: relative;
+        overflow: hidden;
+      }
+      .karaoke-mood.calm {
+        background: linear-gradient(
+          135deg,
+          rgba(6, 214, 160, 0.15),
+          rgba(76, 201, 240, 0.1)
+        );
+        border: 1px solid rgba(6, 214, 160, 0.3);
+      }
+      .karaoke-mood.rant {
+        background: linear-gradient(
+          135deg,
+          rgba(247, 37, 133, 0.15),
+          rgba(255, 140, 0, 0.1)
+        );
+        border: 1px solid rgba(247, 37, 133, 0.3);
+      }
+      .karaoke-mood.curious {
+        background: linear-gradient(
+          135deg,
+          rgba(123, 47, 190, 0.15),
+          rgba(76, 201, 240, 0.1)
+        );
+        border: 1px solid rgba(123, 47, 190, 0.3);
+      }
+      .karaoke-mood.singing {
+        background: linear-gradient(
+          135deg,
+          rgba(76, 201, 240, 0.15),
+          rgba(255, 215, 0, 0.08)
+        );
+        border: 1px solid rgba(76, 201, 240, 0.3);
+      }
+      .karaoke-mood-title {
+        font-size: 0.85rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #fff;
+      }
+      .karaoke-mood-sub {
+        font-size: 0.62rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.5;
+      }
+      .karaoke-steps {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 12px;
+        justify-content: center;
+      }
+      .step-dot {
+        width: 28px;
+        height: 6px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.1);
+        transition: all 0.3s;
+      }
+      .step-dot.done {
+        background: var(--ok);
+      }
+      .step-dot.active {
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+      }
+      .karaoke-hint {
+        font-size: 0.7rem;
+        color: rgba(224, 224, 224, 0.4);
+        text-align: center;
+        margin-bottom: 8px;
+        font-style: italic;
+      }
+      .karaoke-script {
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.15);
+        border-radius: 8px;
+        padding: 12px 14px;
+        margin-bottom: 12px;
+        min-height: 80px;
+        font-size: 0.82rem;
+        line-height: 1.7;
+        color: rgba(224, 224, 224, 0.85);
+      }
+      .karaoke-script .kline {
+        display: block;
+        transition: all 0.3s;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      .karaoke-script .kline.active {
+        background: rgba(76, 201, 240, 0.12);
+        color: #fff;
+        font-weight: 600;
+      }
+      .karaoke-script .kline.done {
+        opacity: 0.35;
+      }
+      .record-ring {
+        width: 72px;
+        height: 72px;
+        border-radius: 50%;
+        background: rgba(247, 37, 133, 0.1);
+        border: 2px solid rgba(247, 37, 133, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        margin: 0 auto 6px;
+        transition: all 0.2s;
+      }
+      .record-ring:hover {
+        background: rgba(247, 37, 133, 0.2);
+        border-color: var(--warn);
+      }
+      .record-ring.recording {
+        background: rgba(247, 37, 133, 0.25);
+        border-color: var(--warn);
+        animation: ripple 1.2s infinite;
+      }
+      @keyframes ripple {
+        0% {
+          box-shadow: 0 0 0 0 rgba(247, 37, 133, 0.4);
+        }
+        70% {
+          box-shadow: 0 0 0 16px rgba(247, 37, 133, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(247, 37, 133, 0);
+        }
+      }
+      .record-icon {
+        font-size: 0.75rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--warn);
+      }
+      .record-label {
+        text-align: center;
+        font-size: 0.72rem;
+        color: rgba(224, 224, 224, 0.45);
+        margin-bottom: 12px;
+      }
+      .record-timer {
+        text-align: center;
+        font-size: 0.9rem;
+        font-weight: 700;
+        color: var(--warn);
+        letter-spacing: 0.1em;
+        min-height: 20px;
+        margin-bottom: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+      .train-nav {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .train-status-bar {
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.15);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 0.75rem;
+        color: rgba(224, 224, 224, 0.65);
+        margin-bottom: 10px;
+        min-height: 36px;
+      }
+      .trained-voice-id {
+        display: none;
+        font-size: 0.68rem;
+        color: var(--ok);
+        background: rgba(6, 214, 160, 0.08);
+        border: 1px solid rgba(6, 214, 160, 0.2);
+        border-radius: 6px;
+        padding: 6px 10px;
+        margin-bottom: 8px;
+        word-break: break-all;
+      }
+      /* TRACK */
+      .track-input-row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+      .result-box {
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.15);
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 0.78rem;
+        line-height: 1.6;
+        min-height: 110px;
+        color: rgba(224, 224, 224, 0.85);
+        white-space: pre-wrap;
+        word-break: break-all;
+        margin-bottom: 10px;
+      }
+      .pdf-drop {
+        border: 2px dashed rgba(76, 201, 240, 0.25);
+        border-radius: 8px;
+        padding: 16px;
+        text-align: center;
+        font-size: 0.76rem;
+        color: rgba(224, 224, 224, 0.4);
+        cursor: pointer;
+        transition: all 0.2s;
+        margin-bottom: 10px;
+      }
+      .pdf-drop:hover,
+      .pdf-drop.dragover {
+        border-color: var(--accent);
+        background: rgba(76, 201, 240, 0.05);
+        color: var(--accent);
+      }
+      .pdf-hint {
+        font-size: 0.68rem;
+        color: rgba(76, 201, 240, 0.5);
+      }
+      .hidden-file-input {
+        display: none;
+      }
+      .pdf-result-box {
+        min-height: 60px;
+      }
+      /* LOG */
+      .log-header-row {
+        margin-bottom: 12px;
+      }
+      .log-header-label {
+        margin: 0;
+        line-height: 2;
+      }
+      .clear-log-btn {
+        flex: 0;
+        padding: 4px 12px;
+      }
+      .log-list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 360px;
+        overflow-y: auto;
+      }
+      .log-item {
+        background: var(--panel);
+        border: 1px solid rgba(76, 201, 240, 0.1);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-size: 0.75rem;
+        line-height: 1.5;
+      }
+      .log-item .log-time {
+        color: rgba(224, 224, 224, 0.35);
+        font-size: 0.68rem;
+      }
+      .log-item .log-type {
+        font-weight: 700;
+        margin-right: 6px;
+      }
+      .log-empty {
+        text-align: center;
+        color: rgba(224, 224, 224, 0.25);
+        font-size: 0.78rem;
+        padding: 40px 0;
+      }
+      ::-webkit-scrollbar {
+        width: 4px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: rgba(76, 201, 240, 0.3);
+        border-radius: 2px;
+      }
+      .footer {
+        padding: 10px 20px 14px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-top: 1px solid rgba(76, 201, 240, 0.08);
+        font-size: 0.65rem;
+        color: rgba(224, 224, 224, 0.25);
+      }
+      #conn-status {
+        color: var(--ok);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Voice AI Tools</h1>
+      <div class="status-dot" id="status-dot"></div>
+    </header>
+    <div class="tabs">
+      <div class="tab active" data-tab="voice">Voice</div>
+      <div class="tab" data-tab="train">Train</div>
+      <div class="tab" data-tab="track">Track</div>
+      <div class="tab" data-tab="log">Log</div>
+    </div>
+
+    <!-- VOICE -->
+    <div class="panel active" id="panel-voice">
+      <div class="visualizer" id="visualizer">
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+      </div>
+      <div class="voice-mode-row">
+        <button class="mode-btn active" id="btn-mode-cloned">My Voice</button>
+        <button class="mode-btn" id="btn-mode-stock">Stock</button>
+      </div>
+      <div class="voice-status" id="voice-status">Ready</div>
+      <div class="row">
+        <select id="voice-speed" title="Voice Speed">
+          <option value="normal">Normal Speed</option>
+          <option value="slow">Slow</option>
+          <option value="fast">Fast</option>
+        </select>
+        <select id="voice-lang" title="Voice Language">
+          <option value="en-US">English (US)</option>
+          <option value="en-GB">English (UK)</option>
+          <option value="es-ES">Spanish</option>
+        </select>
+      </div>
+      <div class="section-label">Quick Phrases</div>
+      <div class="suggested-phrases" id="suggested-phrases">
+        <button
+          class="phrase-btn"
+          data-phrase="Hello, this is a test of the text to speech system."
+        >
+          Hello, this is a test
+        </button>
+        <button
+          class="phrase-btn"
+          data-phrase="The quick brown fox jumps over the lazy dog."
+        >
+          Quick brown fox
+        </button>
+        <button
+          class="phrase-btn"
+          data-phrase="Welcome to Voice AI Tools. This is your cloned voice speaking."
+        >
+          Welcome message
+        </button>
+        <button
+          class="phrase-btn"
+          data-phrase="Testing one two three. Can you hear me clearly?"
+        >
+          Sound check
+        </button>
+        <button
+          class="phrase-btn"
+          data-phrase="This is a longer sentence to test how the text to speech handles more complex phrases and punctuation."
+        >
+          Longer test
+        </button>
+      </div>
+      <textarea
+        id="tts-text"
+        placeholder="Type what you want to speak..."
+      ></textarea>
+      <button class="btn btn-primary" id="btn-speak">SPEAK</button>
+      <div class="row">
+        <button class="btn btn-sm btn-warn" id="btn-clear-voice">Clear</button>
+        <button class="btn btn-sm btn-ok" id="btn-compare">AB Compare</button>
+      </div>
+    </div>
+
+    <!-- TRAIN (KARAOKE) -->
+    <div class="panel" id="panel-train">
+      <div class="karaoke-mood calm" id="karaoke-mood">
+        <div>
+          <div class="karaoke-mood-title" id="karaoke-mood-label">
+            Calm Reading
+          </div>
+          <div class="karaoke-mood-sub">Take 1 of 4</div>
+        </div>
+        <div class="karaoke-mood-sub" id="karaoke-take-sub">relaxed tone</div>
+      </div>
+      <div class="karaoke-steps" id="karaoke-steps">
+        <div class="step-dot active" data-step="0"></div>
+        <div class="step-dot" data-step="1"></div>
+        <div class="step-dot" data-step="2"></div>
+        <div class="step-dot" data-step="3"></div>
+      </div>
+      <div class="karaoke-hint" id="karaoke-hint">
+        Read this in a relaxed, even tone -- like explaining something to a
+        friend.
+      </div>
+      <div class="karaoke-script" id="karaoke-script"></div>
+      <div class="record-timer" id="record-timer"></div>
+      <div class="record-ring" id="record-btn">
+        <span class="record-icon" id="record-icon">REC</span>
+      </div>
+      <div class="record-label" id="record-label">Tap to record this take</div>
+      <div class="train-nav">
+        <button class="btn btn-sm" id="btn-prev-take">Prev</button>
+        <button class="btn btn-sm" id="btn-redo-take">Redo Take</button>
+        <button class="btn btn-sm" id="btn-next-take">Next</button>
+      </div>
+      <div class="train-status-bar" id="train-status">
+        Record all 4 takes, then train your voice.
+      </div>
+      <div class="trained-voice-id" id="trained-voice-id"></div>
+      <button class="btn btn-primary" id="btn-train" disabled>
+        TRAIN MY VOICE (0/4)
+      </button>
+      <div class="row">
+        <button class="btn btn-sm btn-warn" id="btn-clear-clips">Reset</button>
+        <button class="btn btn-sm btn-ok" id="btn-check-model">
+          Check Model
+        </button>
+      </div>
+    </div>
+
+    <!-- TRACK -->
+    <div class="panel" id="panel-track">
+      <div class="section-label">IP / Domain Lookup</div>
+      <div class="track-input-row">
+        <input
+          type="text"
+          id="track-ip"
+          placeholder="IP address or domain..."
+        />
+        <button class="btn btn-sm" id="btn-track">Scan</button>
+      </div>
+      <div class="result-box" id="track-result">
+        Results will appear here after scanning...
+      </div>
+      <div class="section-label">Drop PDF to Analyze</div>
+      <div class="pdf-drop" id="pdf-drop">
+        Drop a PDF here or click to select<br /><span class="pdf-hint"
+          >.pdf -- extracts links, metadata, embedded IPs</span
+        >
+      </div>
+      <input
+        type="file"
+        id="pdf-file"
+        accept=".pdf"
+        class="hidden-file-input"
+      />
+      <div class="result-box pdf-result-box" id="pdf-result">
+        PDF analysis output...
+      </div>
+    </div>
+
+    <!-- LOG -->
+    <div class="panel" id="panel-log">
+      <div class="row log-header-row">
+        <div class="section-label log-header-label">Session Log</div>
+        <button class="btn btn-sm btn-warn clear-log-btn" id="btn-clear-log">
+          Clear
+        </button>
+      </div>
+      <div class="log-list" id="log-list">
+        <div class="log-empty">No activity logged yet.</div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <span>voice-ai-tools v3.0</span>
+      <span id="conn-status">connected</span>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
