@@ -1,4 +1,5 @@
 # voice-ai-tools
+<!-- screenshot-test -->
 
 A locally-run Flask backend and Chrome extension for voice synthesis, voice cloning, OSINT lookups, and PDF forensics. Powered by Google Gemini for TTS and Shodan for threat intelligence.
 
