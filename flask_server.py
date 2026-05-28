@@ -186,9 +186,6 @@ def _is_audio_upload(file_storage) -> bool:
     if detected_mime.startswith("audio/"):
         return True
     # Container-based magic-byte checks for common training clip formats.
-    # These are evaluated even when python-magic is present so that audio-only
-    # containers (e.g. M4A / MP4 audio) that libmagic reports as "video/mp4"
-    # are still accepted by combining the MIME result with the byte-level check.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
         return True  # WAV
     if header.startswith(b"ID3"):
@@ -207,13 +204,48 @@ def _is_audio_upload(file_storage) -> bool:
         if major_brand in {b"M4A ", b"M4B "}:
             return True  # M4A/MP4 audio containers
         if {b"M4A ", b"M4B "} & compatible_brands:
-            return True  # M4A/MP4 audio containers
-        # Accept any valid MP4 container when python-magic has already identified
-        # the file as video/mp4, since audio-only MP4s are commonly reported with
-        # that MIME type by libmagic (e.g. files with "mp42"/"isom" major brands).
+            return True
         if detected_mime.startswith("video/mp4"):
             return True
     return False
+
+
+# ── result filtering ──────────────────────────────────────────────────
+# Allowlist of keys returned to clients from /analyze_pdf and /api/lookup.
+# This prevents accidental leakage of internal fields added by lookup_engine
+# or the PDF parsers (e.g. raw byte buffers, internal paths, error traces).
+_LOOKUP_ALLOWED_KEYS = {
+    # shared
+    "query", "type", "timestamp",
+    # domain
+    "domain", "registrar", "creation_date", "expiration_date",
+    "name_servers", "status", "dnssec", "a", "mx", "txt", "ns",
+    "whois",
+    # ip
+    "ip", "hostname", "city", "region", "country", "org", "asn",
+    "isp", "loc", "timezone", "postal",
+    # phone
+    "phone", "valid", "carrier", "line_type", "location",
+    "country_code", "national_number", "international",
+    # error / status
+    "error", "note",
+}
+
+_PDF_ALLOWED_KEYS = {"metadata", "links", "ips", "suspicious", "pages", "error", "note"}
+
+
+def _filter_lookup_result(result: dict) -> dict:
+    """Strip any keys not in the lookup allowlist before sending to the client."""
+    if not isinstance(result, dict):
+        return {}
+    return {k: v for k, v in result.items() if k in _LOOKUP_ALLOWED_KEYS}
+
+
+def _filter_pdf_result(result: dict) -> dict:
+    """Strip any keys not in the PDF allowlist before sending to the client."""
+    if not isinstance(result, dict):
+        return {}
+    return {k: v for k, v in result.items() if k in _PDF_ALLOWED_KEYS}
 
 
 # ── voice-settings resolution ─────────────────────────────────────────
@@ -429,7 +461,7 @@ def analyze_pdf():
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
                 result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-                return jsonify(_filter_lookup_result(result))
+                return jsonify(_filter_pdf_result(result))
         except Exception:
             pass
 
@@ -446,7 +478,7 @@ def analyze_pdf():
             result["links"]      = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-            return jsonify(_filter_lookup_result(result))
+            return jsonify(_filter_pdf_result(result))
         except Exception:
             app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
             return jsonify({"error": "Failed to analyze PDF"}), 500
@@ -457,7 +489,7 @@ def analyze_pdf():
     result["links"]      = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
     result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
-    return jsonify(_filter_lookup_result(result))
+    return jsonify(_filter_pdf_result(result))
 
 
 # ── /train ────────────────────────────────────────────────────────────
@@ -476,9 +508,6 @@ def train():
         safe = re.sub(r'[^\w.\-]', '_', fname)
         safe = Path(safe).name
         if not safe or safe.startswith("."):
-            # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
-            # deliberately rejected to prevent hidden or config files from
-            # being persisted in SAMPLES_DIR.
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400

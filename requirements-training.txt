@@ -1,0 +1,4 @@
+# Heavy dependencies only needed for local voice model training (Coqui XTTS).
+# Install with: pip install -r requirements-training.txt
+# Make sure to install requirements.txt first.
+torch>=2.8.0

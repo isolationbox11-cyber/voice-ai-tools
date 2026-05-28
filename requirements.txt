@@ -1,13 +1,29 @@
+# Core Flask server
 flask>=3.0.3
 flask-cors>=6.0.0
 flask-limiter>=3.5.1
-google-genai>=0.8.0
 python-dotenv>=1.2.2
+requests>=2.32.3
+
+# Google Gemini TTS
+google-genai>=0.8.0
+
+# PDF analysis
 pdfplumber>=0.11.0
 PyPDF2>=3.0.1
-requests>=2.32.3
+
+# Audio file type detection (optional but recommended)
+python-magic>=0.4.27
+
+# Audio I/O
 soundfile>=0.12.1
-torch>=2.8.0
+
+# OSINT lookups
 dnspython>=2.4.0
 python-whois>=0.9.0
 phonenumbers>=8.13.0
+
+# Voice model training — heavy (installs PyTorch ~2GB)
+# Only needed if you use the /train endpoint with local Coqui XTTS.
+# Install separately: pip install torch>=2.8.0
+# torch>=2.8.0
