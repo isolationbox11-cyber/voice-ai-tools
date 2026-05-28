@@ -187,6 +187,14 @@ async function speakText(cloned, silent) {
   const speed = document.getElementById('voice-speed');
 
   return new Promise((resolve) => {
+    // Add timeout guard to prevent permanent UI freeze if offscreen crashes
+    const timeout = setTimeout(() => {
+      if (!silent && speakBtn) speakBtn.disabled = false;
+      if (statusEl && !silent) statusEl.textContent = 'Timeout: audio playback failed to start';
+      addLog('warn', 'TTS timeout - offscreen page may have crashed');
+      resolve();
+    }, 10000); // 10 second timeout
+
     chrome.runtime.sendMessage({
       type: 'TTS_REQUEST',
       text,
@@ -196,6 +204,7 @@ async function speakText(cloned, silent) {
       voiceId: cloned ? 'cloned' : 'Kore',
       speed: speed ? speed.value : 'normal',
     }, (response) => {
+      clearTimeout(timeout); // Clear timeout on response
       const err = chrome.runtime.lastError;
       if (err) {
         // Extension messaging error (e.g. service worker not running)
@@ -219,7 +228,7 @@ async function speakText(cloned, silent) {
 
 // Offscreen events own the final playback UI state.
 // These fire whether or not the popup is the one that initiated the request.
-chrome.runtime.onMessage.addListener((message) => {
+const messageListener = (message) => {
   const statusEl = document.getElementById('voice-status');
   if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {
     if (statusEl) statusEl.textContent = 'Done';
@@ -227,6 +236,13 @@ chrome.runtime.onMessage.addListener((message) => {
     if (statusEl) statusEl.textContent = 'Playback error: ' + (message.error || 'unknown');
     addLog('warn', 'Playback error: ' + (message.error || 'unknown'));
   }
+};
+
+chrome.runtime.onMessage.addListener(messageListener);
+
+// Clean up listener when popup closes to prevent memory leaks
+window.addEventListener('unload', () => {
+  chrome.runtime.onMessage.removeListener(messageListener);
 });
 
 // -- train tab (karaoke)

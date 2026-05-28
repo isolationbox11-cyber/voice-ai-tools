@@ -80,6 +80,20 @@ def synthesize_speech(
         try:
             from voice_training import synthesize_with_cloned_voice
 
+            # Check if the voice uses fallback engine (Coqui not installed)
+            import json
+            from pathlib import Path
+
+            embeddings_root = Path("voice_embeddings").resolve()
+            embedding_path = (embeddings_root / f"{voice_id}.json").resolve()
+            if embedding_path.exists():
+                data = json.loads(embedding_path.read_text())
+                engine = data.get("engine", "fallback")
+                if engine == "fallback":
+                    error_msg = "Voice cloning requires Coqui TTS (pip install TTS). Falling back to default voice."
+                    logger.warning(error_msg)
+                    return None, "", error_msg, text
+
             audio_bytes = synthesize_with_cloned_voice(text, voice_id)
             if audio_bytes:
                 if debug_output_path:

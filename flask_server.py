@@ -16,7 +16,20 @@ Env vars:
 # v2 - security hardened
 import os, io, re, json, time, uuid, importlib, sys, threading
 from pathlib import Path
+
+# Optional monitoring dependency
+try:
+    import psutil
+
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+# Crypto dependencies (always available in Python standard library)
+import hmac
+import hashlib
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from flask import Flask, request, jsonify, Response, send_file
@@ -47,6 +60,7 @@ except ImportError:
 
 try:
     import tts_engine as _tts_engine
+
     synthesize_speech = _tts_engine.synthesize_speech
     TTS_MAX_TEXT_LENGTH = getattr(_tts_engine, "MAX_TEXT_LENGTH", 2000)
 except ImportError:
@@ -60,28 +74,47 @@ except ImportError:
 
 try:
     import lookup_engine as _lookup_engine
+
     _LOOKUP_OK = True
 except ImportError:
     _lookup_engine = None
     _LOOKUP_OK = False
 
+try:
+    import backup_manager as _backup_manager
+
+    _BACKUP_OK = True
+except ImportError:
+    _backup_manager = None
+    _BACKUP_OK = False
+
 # ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
-SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
-MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
+SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
+MAX_TEXT_LENGTH = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
 # 512 bytes is sufficient to read a complete ftyp box in MP4/M4A containers
 # and the fixed-size magic headers used by WAV, MP3, OGG, FLAC, and WebM.
 AUDIO_HEADER_READ_SIZE = 512
-PRESET_PATH        = Path("voice_presets.json")
-LOG_PATH           = Path("session_log.json")
-MODEL_DIR          = Path("voice_model")
-SAMPLES_DIR        = Path("voice_samples")
-PRESET_WRITE_LOCK  = threading.Lock()
+PRESET_PATH = Path("voice_presets.json")
+LOG_PATH = Path("session_log.json")
+MODEL_DIR = Path("voice_model")
+SAMPLES_DIR = Path("voice_samples")
+PRESET_WRITE_LOCK = threading.Lock()
 SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
-SERVER_START_TIME  = time.time()
+SERVER_START_TIME = time.time()
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
+
+# Request signing configuration
+ENABLE_REQUEST_SIGNING = (
+    os.environ.get("ENABLE_REQUEST_SIGNING", "false").lower() == "true"
+)
+SIGNING_TOLERANCE_SECONDS = int(
+    os.environ.get("SIGNING_TOLERANCE_SECONDS", "300")
+)  # 5 minutes default
+_signature_nonce_cache = {}
+_signature_nonce_lock = threading.Lock()
 
 _GEMINI_DEFAULT_VOICE = "Kore"
 
@@ -97,7 +130,9 @@ if not VOICE_SERVER_TOKEN:
     )
 
 # ── CORS ──────────────────────────────────────────────────────────────
-_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
+_extra_origins = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
 ALLOWED_ORIGINS = [
     "http://127.0.0.1:5001",
     "http://localhost:5001",
@@ -115,24 +150,103 @@ def _safe_public_error_message(raw_error) -> str:
     if any(
         token in msg
         for token in (
-            "api key missing", "missing api key", "api key not configured",
-            "apikey missing", "apikey not configured", "invalid api key",
-            "api key invalid", "unauthorized", "authentication failed",
+            "api key missing",
+            "missing api key",
+            "api key not configured",
+            "apikey missing",
+            "apikey not configured",
+            "invalid api key",
+            "api key invalid",
+            "unauthorized",
+            "authentication failed",
         )
     ):
         return "API key not configured"
     if any(
         token in msg
         for token in (
-            "voice model unavailable", "voice model not found", "voice not found",
-            "model not found", "voice unavailable", "model unavailable",
-            "unsupported voice", "unsupported model", "invalid voice", "invalid model",
+            "voice model unavailable",
+            "voice model not found",
+            "voice not found",
+            "model not found",
+            "voice unavailable",
+            "model unavailable",
+            "unsupported voice",
+            "unsupported model",
+            "invalid voice",
+            "invalid model",
         )
     ):
         return "Voice model unavailable"
     if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
         return "Request timed out"
     return "Speech synthesis failed"
+
+
+def _validate_request_signature() -> tuple[bool, str]:
+    """Validate HMAC signature for replay protection.
+
+    Expected headers:
+      X-Voice-Token: the shared secret
+      X-Signature-Timestamp: Unix timestamp
+      X-Signature-Nonce: unique value for this request
+      X-Signature: HMAC-SHA256(token + timestamp + nonce, request_body)
+
+    Returns:
+      (is_valid, error_message)
+    """
+    if not ENABLE_REQUEST_SIGNING or not VOICE_SERVER_TOKEN:
+        return True, ""  # Signing disabled, skip validation
+
+    token = request.headers.get("X-Voice-Token", "")
+    timestamp_str = request.headers.get("X-Signature-Timestamp", "")
+    nonce = request.headers.get("X-Signature-Nonce", "")
+    signature = request.headers.get("X-Signature", "")
+
+    if not all([token, timestamp_str, nonce, signature]):
+        return False, "Missing required signature headers"
+
+    try:
+        timestamp = int(timestamp_str)
+        current_time = int(time.time())
+
+        # Check timestamp is within tolerance
+        if abs(current_time - timestamp) > SIGNING_TOLERANCE_SECONDS:
+            return False, "Request timestamp too old or too new"
+
+        # Check nonce hasn't been used before (replay protection)
+        with _signature_nonce_lock:
+            if nonce in _signature_nonce_cache:
+                return False, "Replay detected: nonce already used"
+
+            # Store nonce with timestamp for cleanup
+            _signature_nonce_cache[nonce] = timestamp
+
+            # Clean up old nonces (older than 2x tolerance)
+            cutoff = current_time - (SIGNING_TOLERANCE_SECONDS * 2)
+            _signature_nonce_cache = {
+                k: v for k, v in _signature_nonce_cache.items() if v > cutoff
+            }
+
+        # Calculate expected signature
+        request_body = request.get_data(as_text=True)
+        message = f"{token}{timestamp}{nonce}{request_body}"
+
+        expected_signature = hmac.new(
+            VOICE_SERVER_TOKEN.encode(), message.encode(), hashlib.sha256
+        ).hexdigest()
+
+        # Use constant-time comparison to prevent timing attacks
+        if not hmac.compare_digest(signature, expected_signature):
+            return False, "Invalid signature"
+
+        return True, ""
+
+    except (ValueError, TypeError):
+        return False, "Invalid timestamp format"
+    except Exception as e:
+        logger.error(f"Signature validation error: {e}")
+        return False, "Signature validation failed"
 
 
 def _validate_log_entry(data):
@@ -142,8 +256,8 @@ def _validate_log_entry(data):
     unknown_keys = set(data.keys()) - allowed_keys
     if unknown_keys:
         return None, f"Unknown fields: {', '.join(sorted(unknown_keys))}"
-    action    = data.get("action")
-    text      = data.get("text")
+    action = data.get("action")
+    text = data.get("text")
     timestamp = data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if not isinstance(action, str) or not action.strip():
         return None, "action is required"
@@ -151,17 +265,49 @@ def _validate_log_entry(data):
         return None, "text is required"
     if not isinstance(timestamp, str) or not timestamp.strip():
         return None, "timestamp must be a non-empty string"
-    entry = {"action": action.strip(), "timestamp": timestamp.strip(), "text": text.strip()}
+    entry = {
+        "action": action.strip(),
+        "timestamp": timestamp.strip(),
+        "text": text.strip(),
+    }
     if len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) > MAX_LOG_ENTRY_SIZE:
         return None, f"log entry exceeds maximum size of {MAX_LOG_ENTRY_SIZE} bytes"
     return entry, None
 
 
 # ── auth ──────────────────────────────────────────────────────────────
-def _check_token() -> bool:
+def _check_token() -> tuple[bool, str]:
+    """Check token and optionally validate request signature.
+
+    Returns:
+      (is_authenticated, error_message)
+    """
     if not VOICE_SERVER_TOKEN:
-        return True
-    return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
+        return True, ""
+
+    # Check token
+    if request.headers.get("X-Voice-Token", "") != VOICE_SERVER_TOKEN:
+        return False, "Invalid token"
+
+    # Check signature if enabled
+    if ENABLE_REQUEST_SIGNING:
+        is_valid, error_msg = _validate_request_signature()
+        if not is_valid:
+            return False, error_msg
+
+    return True, ""
+
+
+def _require_auth():
+    """Wrapper to enforce authentication on protected endpoints.
+
+    Returns 401 response if authentication fails, otherwise returns None.
+    """
+    is_auth, error_msg = _check_token()
+    if not is_auth:
+        return jsonify({"error": error_msg or "Authentication required"}), 401
+    return None
+
 
 def _is_audio_upload(file_storage) -> bool:
     stream = getattr(file_storage, "stream", None)
@@ -199,11 +345,11 @@ def _is_audio_upload(file_storage) -> bool:
         return True  # OGG
     if header.startswith(b"fLaC"):
         return True  # FLAC
-    if header.startswith(b"\x1A\x45\xDF\xA3"):
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
         return True  # WebM/Matroska (audio/webm)
     if len(header) >= 16 and header[4:8] == b"ftyp":
         major_brand = header[8:12]
-        compatible_brands = {header[i:i + 4] for i in range(16, len(header) - 3, 4)}
+        compatible_brands = {header[i : i + 4] for i in range(16, len(header) - 3, 4)}
         if major_brand in {b"M4A ", b"M4B "}:
             return True  # M4A/MP4 audio containers
         if {b"M4A ", b"M4B "} & compatible_brands:
@@ -226,7 +372,9 @@ def _resolve_voice_settings(call_type: str) -> dict:
             if isinstance(result, dict):
                 resolved = dict(result)
                 if not resolved.get("voice_id"):
-                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
+                    resolved["voice_id"] = getattr(
+                        custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE
+                    )
                 return resolved
     except Exception:
         pass
@@ -243,24 +391,96 @@ def _resolve_voice_settings(call_type: str) -> dict:
     return {"voice_id": _GEMINI_DEFAULT_VOICE}
 
 
+# ── /api/docs ─────────────────────────────────────────────────────────
+@app.route("/api/docs")
+def api_docs():
+    """Serve OpenAPI/Swagger documentation."""
+    try:
+        with open("openapi.json", "r") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"error": "API documentation not available"}), 404
+
+
 # ── /health ───────────────────────────────────────────────────────────
 @app.route("/health")
 def health():
-    return jsonify({
+    health_data = {
         "status": "ok",
         "tts_engine": synthesize_speech is not None,
         "api_key_configured": bool(os.environ.get("GOOGLE_API_KEY", "").strip()),
         "auth_enabled": bool(VOICE_SERVER_TOKEN),
         "uptime_seconds": int(time.time() - SERVER_START_TIME),
-    })
+    }
+
+    # Add optional detailed monitoring
+    if HAS_PSUTIL:
+        try:
+            process = psutil.Process()
+            health_data.update(
+                {
+                    "memory_mb": round(process.memory_info().rss / 1024 / 1024, 2),
+                    "cpu_percent": process.cpu_percent(),
+                    "thread_count": process.num_threads(),
+                }
+            )
+            # Disk space for voice samples and models
+            try:
+                disk_usage = psutil.disk_usage(str(SAMPLES_DIR.parent))
+                health_data["disk_gb_free"] = round(
+                    disk_usage.free / 1024 / 1024 / 1024, 2
+                )
+                health_data["disk_gb_total"] = round(
+                    disk_usage.total / 1024 / 1024 / 1024, 2
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # Voice model statistics
+    try:
+        embedding_dir = Path("voice_embeddings")
+        if embedding_dir.exists():
+            embeddings = list(embedding_dir.glob("*.json"))
+            health_data["voice_embeddings_count"] = len(embeddings)
+    except Exception:
+        pass
+
+    # Sample files count
+    try:
+        samples = list(SAMPLES_DIR.glob("*")) if SAMPLES_DIR.exists() else []
+        health_data["voice_samples_count"] = len([f for f in samples if f.is_file()])
+    except Exception:
+        pass
+
+    # Coqui model status
+    try:
+        import voice_training
+
+        health_data["coqui_model_available"] = (
+            voice_training._get_coqui_model() is not None
+        )
+    except Exception:
+        health_data["coqui_model_available"] = False
+
+    # Optional dependencies status
+    health_data["optional_deps"] = {
+        "shodan": _requests is not None and bool(SHODAN_API_KEY),
+        "pdf_analysis": pdfplumber is not None,
+        "osint_lookup": _LOOKUP_OK,
+    }
+
+    return jsonify(health_data)
 
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
 @limiter.limit("30 per minute")
 def tts():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
@@ -268,9 +488,13 @@ def tts():
     if not text:
         return jsonify({"error": "text is required"}), 400
     if len(text) > MAX_TEXT_LENGTH:
-        return jsonify({"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH} characters"}), 400
+        return jsonify(
+            {"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH} characters"}
+        ), 400
     if synthesize_speech is None:
-        return jsonify({"error": "TTS engine not available — install google-genai"}), 503
+        return jsonify(
+            {"error": "TTS engine not available — install google-genai"}
+        ), 503
     try:
         call_type = data.get("call_type")
         if isinstance(call_type, str):
@@ -299,8 +523,9 @@ def tts():
 @app.route("/presets", methods=["GET", "POST"])
 @limiter.limit("60 per minute")
 def presets():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     if request.method == "GET":
         try:
             with open(PRESET_PATH) as f:
@@ -315,7 +540,10 @@ def presets():
         if PRESET_PATH.exists():
             with open(PRESET_PATH) as f:
                 presets_list = json.load(f).get("presets", [])
-        existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
+        existing = next(
+            (i for i, p in enumerate(presets_list) if p.get("name") == data["name"]),
+            None,
+        )
         if existing is not None:
             presets_list[existing] = data
         else:
@@ -329,8 +557,9 @@ def presets():
 @app.route("/log", methods=["GET", "POST"])
 @limiter.limit("120 per minute")
 def log_endpoint():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     if request.method == "GET":
         try:
             with open(LOG_PATH) as f:
@@ -358,8 +587,9 @@ def log_endpoint():
 @app.route("/log/clear", methods=["POST"])
 @limiter.limit("30 per minute")
 def clear_log_endpoint():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     with open(LOG_PATH, "w") as f:
         json.dump({"entries": []}, f, indent=2)
     return jsonify({"ok": True})
@@ -375,8 +605,9 @@ def _filter_shodan_response(payload):
 @app.route("/shodan")
 @limiter.limit("10 per minute")
 def shodan():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     ip = request.args.get("ip", "").strip()
     if not ip:
         return jsonify({"error": "ip param required"}), 400
@@ -399,16 +630,25 @@ def shodan():
 @app.route("/analyze_pdf", methods=["POST"])
 @limiter.limit("10 per minute")
 def analyze_pdf():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
     raw = f.read()
     result = {"metadata": {}, "links": [], "ips": [], "suspicious": False, "pages": 0}
-    ip_pattern  = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    ip_pattern = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
-    suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
+    suspicious_keywords = [
+        "eval(",
+        "javascript:",
+        "/launch",
+        "/aa",
+        "/openaction",
+        "cmd.exe",
+        "powershell",
+    ]
 
     if pdfplumber:
         try:
@@ -420,15 +660,17 @@ def analyze_pdf():
                 for page in pdf.pages:
                     t = page.extract_text() or ""
                     full_text += t
-                    for href in (page.hyperlinks or []):
+                    for href in page.hyperlinks or []:
                         uri = href.get("uri", "")
                         if uri:
                             result["links"].append(uri)
-                result["ips"]   = list(set(ip_pattern.findall(full_text)))
-                extra_links     = url_pattern.findall(full_text)
+                result["ips"] = list(set(ip_pattern.findall(full_text)))
+                extra_links = url_pattern.findall(full_text)
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
-                result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+                result["suspicious"] = any(
+                    kw in raw_lower for kw in suspicious_keywords
+                )
                 return jsonify(_filter_lookup_result(result))
         except Exception:
             pass
@@ -438,12 +680,14 @@ def analyze_pdf():
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
             result["pages"] = len(reader.pages)
             info = reader.metadata or {}
-            result["metadata"] = {str(k).lstrip("/"): str(v) for k, v in info.items() if v}
+            result["metadata"] = {
+                str(k).lstrip("/"): str(v) for k, v in info.items() if v
+            }
             full_text = ""
             for page in reader.pages:
-                full_text += (page.extract_text() or "")
-            result["ips"]        = list(set(ip_pattern.findall(full_text)))
-            result["links"]      = list(set(url_pattern.findall(full_text)))
+                full_text += page.extract_text() or ""
+            result["ips"] = list(set(ip_pattern.findall(full_text)))
+            result["links"] = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
             return jsonify(_filter_lookup_result(result))
@@ -452,11 +696,11 @@ def analyze_pdf():
             return jsonify({"error": "Failed to analyze PDF"}), 500
 
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
-    raw_str   = raw.decode("latin-1", errors="ignore")
-    result["ips"]        = list(set(ip_pattern.findall(raw_str)))
-    result["links"]      = list(set(url_pattern.findall(raw_str)))
+    raw_str = raw.decode("latin-1", errors="ignore")
+    result["ips"] = list(set(ip_pattern.findall(raw_str)))
+    result["links"] = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-    result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
+    result["metadata"] = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
     return jsonify(_filter_lookup_result(result))
 
 
@@ -464,8 +708,9 @@ def analyze_pdf():
 @app.route("/train", methods=["POST"])
 @limiter.limit("5 per minute")
 def train():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
@@ -473,7 +718,7 @@ def train():
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r'[^\w.\-]', '_', fname)
+        safe = re.sub(r"[^\w.\-]", "_", fname)
         safe = Path(safe).name
         if not safe or safe.startswith("."):
             # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
@@ -488,22 +733,25 @@ def train():
         f.save(dest)
         saved.append(safe)
     manifest = {
-        "samples":    saved,
+        "samples": saved,
         "sample_dir": str(SAMPLES_DIR),
         "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count":      len(saved),
+        "count": len(saved),
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
     voice_id = None
     try:
         from voice_training import train_from_samples
+
         voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
         manifest["status"] = "trained" if voice_id else "samples_saved"
         if voice_id:
             manifest["voice_id"] = voice_id
         else:
-            manifest["note"] = "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
+            manifest["note"] = (
+                "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
+            )
     except ImportError:
         manifest["status"] = "samples_saved"
         manifest["note"] = "voice_training.py not found — samples saved only"
@@ -519,9 +767,78 @@ def train():
 # ── /model_status ─────────────────────────────────────────────────────
 @app.route("/model_status")
 def model_status():
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
     return jsonify(_model_status())
+
+
+# ── /cloned_status ───────────────────────────────────────────────────
+@app.route("/cloned_status")
+def cloned_status():
+    """Check if cloned voice is available and whether it uses fallback engine."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    try:
+        import importlib
+
+        cvc = importlib.import_module("custom_voice_config")
+        has_custom_voice = (
+            hasattr(cvc, "CUSTOM_VOICE_SAMPLES") and cvc.CUSTOM_VOICE_SAMPLES
+        )
+
+        result = {
+            "available": has_custom_voice,
+            "engine": "unknown",
+            "requires_coqui": False,
+            "coqui_installed": False,
+            "warning": None,
+        }
+
+        if has_custom_voice:
+            # Check if we have local_voice_* embeddings
+            import json
+            from pathlib import Path
+
+            embeddings_root = Path("voice_embeddings").resolve()
+            if embeddings_root.exists():
+                embedding_files = list(embeddings_root.glob("local_voice_*.json"))
+                if embedding_files:
+                    # Check the first embedding for engine type
+                    data = json.loads(embedding_files[0].read_text())
+                    engine = data.get("engine", "fallback")
+                    result["engine"] = engine
+                    result["requires_coqui"] = engine == "coqui_xtts_v2"
+
+                    # Check if Coqui is installed
+                    try:
+                        import voice_training
+
+                        result["coqui_installed"] = (
+                            voice_training._get_coqui_model() is not None
+                        )
+                    except Exception:
+                        result["coqui_installed"] = False
+
+                    # Generate warning if needed
+                    if result["requires_coqui"] and not result["coqui_installed"]:
+                        result["warning"] = (
+                            "Voice cloning requires Coqui TTS (pip install TTS). Default voice will be used instead."
+                        )
+
+        return jsonify(result)
+
+    except ImportError:
+        return jsonify(
+            {"available": False, "warning": "Custom voice configuration not found"}
+        )
+    except Exception as e:
+        logger.exception("Error checking cloned status")
+        return jsonify(
+            {"available": False, "warning": "Failed to check voice status"}
+        ), 500
 
 
 def _model_status():
@@ -531,13 +848,13 @@ def _model_status():
             with open(manifest_path) as f:
                 m = json.load(f)
             return {
-                "trained":    True,
-                "count":      m.get("count", 0),
+                "trained": True,
+                "count": m.get("count", 0),
                 "trained_at": m.get("trained_at", "unknown"),
-                "status":     m.get("status", "unknown"),
-                "voice_id":   m.get("voice_id"),
-                "error":      m.get("error"),
-                "note":       m.get("note"),
+                "status": m.get("status", "unknown"),
+                "voice_id": m.get("voice_id"),
+                "error": m.get("error"),
+                "note": m.get("note"),
             }
         except Exception:
             pass
@@ -565,11 +882,16 @@ def api_lookup():
     Auth:       X-Voice-Token header (when VOICE_SERVER_TOKEN is set)
     Rate-limit: 20 requests / minute per IP
     """
-    if not _check_token():
-        return jsonify({"error": "Unauthorized"}), 401
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
 
     if not _LOOKUP_OK:
-        return jsonify({"error": "lookup_engine not available — ensure lookup_engine.py is present"}), 503
+        return jsonify(
+            {
+                "error": "lookup_engine not available — ensure lookup_engine.py is present"
+            }
+        ), 503
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -583,10 +905,12 @@ def api_lookup():
 
     # Block private/loopback ranges to prevent SSRF-style abuse
     _private = re.compile(
-        r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)'
+        r"^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)"
     )
     if _private.match(query):
-        return jsonify({"error": "Private or loopback addresses are not supported"}), 400
+        return jsonify(
+            {"error": "Private or loopback addresses are not supported"}
+        ), 400
 
     try:
         result = _lookup_engine.lookup(query)
@@ -598,7 +922,7 @@ def api_lookup():
 
 # ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    _loopback      = {"127.0.0.1", "::1", "localhost"}
+    _loopback = {"127.0.0.1", "::1", "localhost"}
     _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
     _requested_host = os.environ.get("HOST", "127.0.0.1").strip()
 
