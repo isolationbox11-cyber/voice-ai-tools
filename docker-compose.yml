@@ -1,0 +1,110 @@
+version: '3.8'
+
+services:
+  voice-ai-tools:
+    build:
+      context: .
+      target: production
+    container_name: voice-ai-tools
+    ports:
+      - "127.0.0.1:5001:5001"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - VOICE_SERVER_TOKEN=${VOICE_SERVER_TOKEN:-}
+      - SHODAN_API_KEY=${SHODAN_API_KEY:-}
+      - FLASK_ENV=production
+      - ENABLE_REQUEST_SIGNING=true
+      - LOG_LEVEL=INFO
+    volumes:
+      - voice_samples:/app/voice_samples
+      - voice_embeddings:/app/voice_embeddings
+      - backups:/app/backups
+      - cache:/app/cache
+      - logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - voice-ai-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Development service with hot reload
+  voice-ai-tools-dev:
+    build:
+      context: .
+      target: development
+    container_name: voice-ai-tools-dev
+    ports:
+      - "127.0.0.1:5002:5001"
+    environment:
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - VOICE_SERVER_TOKEN=${VOICE_SERVER_TOKEN:-}
+      - FLASK_ENV=development
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./:/app
+      - voice_samples_dev:/app/voice_samples
+      - voice_embeddings_dev:/app/voice_embeddings
+    restart: unless-stopped
+    networks:
+      - voice-ai-network
+    profiles:
+      - development
+
+  # Monitoring service (Prometheus + Grafana)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: voice-ai-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    restart: unless-stopped
+    networks:
+      - voice-ai-network
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: voice-ai-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+    networks:
+      - voice-ai-network
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+volumes:
+  voice_samples:
+  voice_embeddings:
+  backups:
+  cache:
+  logs:
+  voice_samples_dev:
+  voice_embeddings_dev:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  voice-ai-network:
+    driver: bridge
