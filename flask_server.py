@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
 Voice AI Tools - Flask Backend
-Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status /api/lookup
+Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status /api/lookup /cloned_status
 
 Env vars:
   GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
   VOICE_SERVER_TOKEN    - shared secret (X-Voice-Token header) [optional in dev]
   SHODAN_API_KEY        - Shodan API key (optional)
-  ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. chrome-extension://YOUR_ID)
+  ALLOWED_ORIGINS       - comma-separated extra CORS origins
   PORT                  - bind port (default 5001)
-  ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST (unsafe; logs a warning)
+  ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-# v2 - security hardened
 import os, io, re, json, time, uuid, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
@@ -24,7 +23,6 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# -- optional heavy deps
 try:
     import requests as _requests
 except ImportError:
@@ -65,7 +63,6 @@ except ImportError:
     _lookup_engine = None
     _LOOKUP_OK = False
 
-# -- config
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
@@ -88,13 +85,10 @@ if not VOICE_SERVER_TOKEN:
     if flask_env == "production":
         raise RuntimeError("VOICE_SERVER_TOKEN must be set when FLASK_ENV=production")
     print(
-        "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
-        "All protected endpoints are accessible without a token.\n"
-        "Set VOICE_SERVER_TOKEN in production to enable auth.",
+        "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode.",
         file=sys.stderr,
     )
 
-# -- CORS
 _extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = [
     "http://127.0.0.1:5001",
@@ -144,7 +138,6 @@ def _validate_log_entry(data):
     return entry, None
 
 
-# -- auth
 def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
         return True
@@ -197,15 +190,10 @@ def _is_audio_upload(file_storage) -> bool:
     return False
 
 
-# -- result filtering
-# Pass the full lookup result through — the lookup_engine returns nested dicts
-# (geo, dns, whois, etc.) which are all safe to return to the extension client.
-# We only strip keys that are clearly internal / dangerous.
 _LOOKUP_STRIP_KEYS = {"raw", "_internal", "stack", "traceback"}
 
 
 def _sanitize_value(v):
-    """Recursively strip internal keys from nested dicts."""
     if isinstance(v, dict):
         return {k: _sanitize_value(vv) for k, vv in v.items() if k not in _LOOKUP_STRIP_KEYS}
     if isinstance(v, list):
@@ -214,13 +202,11 @@ def _sanitize_value(v):
 
 
 def _filter_lookup_result(result: dict) -> dict:
-    """Strip internal keys from lookup/PDF results before sending to the client."""
     if not isinstance(result, dict):
         return {}
     return {k: _sanitize_value(v) for k, v in result.items() if k not in _LOOKUP_STRIP_KEYS}
 
 
-# -- /health
 @app.route("/health")
 def health():
     return jsonify({
@@ -232,24 +218,41 @@ def health():
     })
 
 
-# -- /cloned_status  (new)
-# Returns whether a trained custom voice is available right now.
+# /cloned_status — tells the popup whether a trained voice is ready AND usable
 @app.route("/cloned_status")
 def cloned_status():
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
     try:
+        # Re-import every time so changes on disk are picked up immediately
+        if "custom_voice_config" in sys.modules:
+            importlib.reload(sys.modules["custom_voice_config"])
         custom = importlib.import_module("custom_voice_config")
         voice_id = getattr(custom, "CUSTOM_VOICE_ID", None)
         engine   = getattr(custom, "CUSTOM_VOICE_ENGINE", None)
-        if voice_id:
-            return jsonify({"available": True, "voice_id": voice_id, "engine": engine})
+        if not voice_id:
+            return jsonify({"available": False, "reason": "no voice_id in config"})
+
+        # If the engine was saved as "fallback" it means Coqui wasn't installed
+        # at training time — the voice cannot actually be synthesised locally.
+        # Report unavailable so the UI doesn't silently fall back to Kore.
+        if engine == "fallback":
+            return jsonify({
+                "available": False,
+                "reason": (
+                    "Voice samples were saved but Coqui TTS is not installed. "
+                    "Run: pip install TTS  then re-train."
+                ),
+                "voice_id": voice_id,
+                "engine": engine,
+            })
+
+        return jsonify({"available": True, "voice_id": voice_id, "engine": engine})
     except ImportError:
         pass
-    return jsonify({"available": False})
+    return jsonify({"available": False, "reason": "no trained voice found"})
 
 
-# -- /tts
 @app.route("/tts", methods=["POST"])
 @limiter.limit("30 per minute")
 def tts():
@@ -289,7 +292,6 @@ def tts():
         return jsonify({"error": "Failed to synthesize speech"}), 500
 
 
-# -- /presets
 @app.route("/presets", methods=["GET", "POST"])
 @limiter.limit("60 per minute")
 def presets():
@@ -319,7 +321,6 @@ def presets():
     return jsonify({"ok": True})
 
 
-# -- /log
 @app.route("/log", methods=["GET", "POST"])
 @limiter.limit("120 per minute")
 def log_endpoint():
@@ -365,7 +366,6 @@ def _filter_shodan_response(payload):
     return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
 
 
-# -- /shodan
 @app.route("/shodan")
 @limiter.limit("10 per minute")
 def shodan():
@@ -389,7 +389,6 @@ def shodan():
         return jsonify({"error": str(e)}), 500
 
 
-# -- /analyze_pdf
 @app.route("/analyze_pdf", methods=["POST"])
 @limiter.limit("10 per minute")
 def analyze_pdf():
@@ -454,7 +453,6 @@ def analyze_pdf():
     return jsonify(_filter_lookup_result(result))
 
 
-# -- /train
 @app.route("/train", methods=["POST"])
 @limiter.limit("5 per minute")
 def train():
@@ -494,7 +492,7 @@ def train():
         if voice_id:
             manifest["voice_id"] = voice_id
         else:
-            manifest["note"] = "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
+            manifest["note"] = "Samples saved. Install Coqui TTS (pip install TTS) to train a real voice model."
     except ImportError:
         manifest["status"] = "samples_saved"
         manifest["note"] = "voice_training.py not found — samples saved only"
@@ -507,7 +505,6 @@ def train():
     return jsonify({"ok": True, "saved": saved, **manifest})
 
 
-# -- /model_status
 @app.route("/model_status")
 def model_status():
     if not _check_token():
@@ -535,10 +532,16 @@ def _model_status():
     return {"trained": False}
 
 
-# -- voice-settings resolution
 def _resolve_voice_settings(call_type: str) -> dict:
     try:
+        if "custom_voice_config" in sys.modules:
+            importlib.reload(sys.modules["custom_voice_config"])
         custom = importlib.import_module("custom_voice_config")
+        engine = getattr(custom, "CUSTOM_VOICE_ENGINE", None)
+        # If Coqui wasn't available at training time the engine is "fallback" —
+        # don't route to the cloned path, fall through to Gemini Kore instead.
+        if engine == "fallback":
+            return {"voice_id": _GEMINI_DEFAULT_VOICE}
         fn = getattr(custom, "get_custom_voice_settings", None)
         if callable(fn):
             result = fn(call_type or "LEGITIMATE")
@@ -562,14 +565,13 @@ def _resolve_voice_settings(call_type: str) -> dict:
     return {"voice_id": _GEMINI_DEFAULT_VOICE}
 
 
-# -- /api/lookup
 @app.route("/api/lookup", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_lookup():
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
     if not _LOOKUP_OK:
-        return jsonify({"error": "lookup_engine not available — ensure lookup_engine.py is present"}), 503
+        return jsonify({"error": "lookup_engine not available"}), 503
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
@@ -591,7 +593,6 @@ def api_lookup():
         return jsonify({"error": "Lookup failed"}), 500
 
 
-# -- run
 if __name__ == "__main__":
     _loopback      = {"127.0.0.1", "::1", "localhost"}
     _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
@@ -605,8 +606,7 @@ if __name__ == "__main__":
         sys.exit(1)
     if _allow_network and _requested_host not in _loopback:
         print(
-            f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}, "
-            "server is reachable from the network.",
+            f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}.",
             file=sys.stderr,
         )
     host = _requested_host if _allow_network else "127.0.0.1"

@@ -5,7 +5,8 @@
   "description": "Browser TTS playback for voice-ai-tools via local Flask server.",
   "permissions": [
     "storage",
-    "offscreen"
+    "offscreen",
+    "microphone"
   ],
   "host_permissions": [
     "http://127.0.0.1:5000/*",
