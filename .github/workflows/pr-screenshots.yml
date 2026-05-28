@@ -8,6 +8,9 @@ on:
 jobs:
   screenshots:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read        # read repo files
+      pull-requests: write  # post/delete the screenshot comment on the PR
     env:
       # Force Node 24 to avoid deprecation warnings
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -76,9 +79,9 @@ jobs:
               }
             }
 
-            // ── Visualizer HTML (file path served directly) ──────────
+            // ── Health page (confirms server is up) ──────────────────
             await shot(
-              'http://127.0.0.1:5001/',  // health page (confirms server is up)
+              'http://127.0.0.1:5001/',
               '01-health.png'
             );
 
@@ -96,7 +99,6 @@ jobs:
             }
 
             // ── /api/lookup live response ─────────────────────────────
-            // Test the lookup API with a live query and capture the result
             const page3 = await context.newPage();
             await page3.setContent(`
               <!DOCTYPE html><html><body style="background:#0d1117;color:#58a6ff;font-family:monospace;padding:24px">
@@ -166,8 +168,6 @@ jobs:
               body += '| Screenshot | Description |\n|---|---|\n';
               for (const f of files) {
                 const label = labels[f] || f.replace(/^\d+-/, '').replace('.png', '');
-                // Embed as artifact download link (images render inline in GH comments
-                // only when uploaded to the PR or via a public URL; we link to the run)
                 body += `| **${label}** | [Download / view in artifacts](${artifactUrl}) |\n`;
               }
               body += `\n> 💡 **Tip:** Download the \`pr-screenshots\` artifact from the link above to view full-resolution images.\n`;
