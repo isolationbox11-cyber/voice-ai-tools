@@ -2,6 +2,7 @@
 
 let currentAudio = null;
 let currentBlobUrl = null;
+let audioContext = null;
 
 function _cleanup() {
   if (currentAudio) {
@@ -17,6 +18,10 @@ function _cleanup() {
   if (currentBlobUrl) {
     URL.revokeObjectURL(currentBlobUrl);
     currentBlobUrl = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
   }
 }
 
@@ -78,6 +83,33 @@ function buildErrorDetails(audio, mimeType, sniffed, size) {
   };
 }
 
+async function playWithWebAudioAPI(bytes, mimeType) {
+  try {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+
+    const gainNode = audioContext.createGain();
+    gainNode.gain.value = 1.0;
+
+    source.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+
+    source.onended = () => {
+      _cleanup();
+      chrome.runtime.sendMessage({ type: "AUDIO_PLAYBACK_COMPLETE" });
+    };
+
+    source.start(0);
+    console.log("Web Audio API playback started");
+  } catch (e) {
+    console.error("Web Audio API playback failed", e);
+    throw e;
+  }
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== "PLAY_AUDIO_OFFSCREEN") return;
 
@@ -87,8 +119,6 @@ chrome.runtime.onMessage.addListener((message) => {
     const bytes = new Uint8Array(message.audioBytes || message.audioData || []);
     const sniffed = sniffAudioFormat(bytes);
     const mimeType = message.mimeType || sniffed.mimeType;
-    const testAudio = document.createElement("audio");
-    const support = testAudio.canPlayType(mimeType);
 
     console.log("Offscreen audio received", {
       declaredMimeType: message.mimeType || "",
@@ -96,7 +126,6 @@ chrome.runtime.onMessage.addListener((message) => {
       sniffedMimeType: sniffed.mimeType,
       sniffedLabel: sniffed.label,
       byteLength: bytes.length,
-      canPlayType: support,
       firstBytes: firstBytesHex(bytes)
     });
 
@@ -109,79 +138,74 @@ chrome.runtime.onMessage.addListener((message) => {
       return;
     }
 
-    if (!support && mimeType !== "audio/wav") {
-      chrome.runtime.sendMessage({
-        type: "AUDIO_PLAYBACK_ERROR",
-        error: `Browser reports unsupported MIME type: ${mimeType}`,
-        details: {
-          declaredMimeType: message.mimeType || "",
-          chosenMimeType: mimeType,
-          sniffedMimeType: sniffed.mimeType,
-          sniffedLabel: sniffed.label,
-          canPlayType: support
-        }
+    // Try Web Audio API first (more reliable for offscreen documents)
+    playWithWebAudioAPI(bytes, mimeType)
+      .then(() => {
+        console.log("Web Audio API playback successful");
+      })
+      .catch((e) => {
+        console.log("Web Audio API failed, falling back to HTML Audio element", e);
+
+        // Fallback to HTML Audio element
+        const blob = new Blob([bytes], { type: mimeType });
+        currentBlobUrl = URL.createObjectURL(blob);
+
+        currentAudio = new Audio();
+        currentAudio.preload = "auto";
+
+        currentAudio.onloadedmetadata = () => {
+          console.log("loadedmetadata", {
+            duration: currentAudio.duration,
+            readyState: currentAudio.readyState
+          });
+        };
+
+        currentAudio.oncanplay = () => {
+          console.log("canplay", {
+            readyState: currentAudio.readyState,
+            currentSrc: currentAudio.currentSrc
+          });
+        };
+
+        currentAudio.onended = () => {
+          _cleanup();
+          chrome.runtime.sendMessage({ type: "AUDIO_PLAYBACK_COMPLETE" });
+        };
+
+        currentAudio.onerror = () => {
+          const details = buildErrorDetails(currentAudio, mimeType, sniffed, blob.size);
+          console.error("Audio element error", details);
+          _cleanup();
+          chrome.runtime.sendMessage({
+            type: "AUDIO_PLAYBACK_ERROR",
+            error: `MediaError code=${details.mediaErrorCode} ${details.mediaErrorMessage || ""}`.trim(),
+            details
+          });
+        };
+
+        currentAudio.src = currentBlobUrl;
+        currentAudio.load();
+
+        currentAudio.play().catch((err) => {
+          console.error("Audio play() failed", {
+            name: err.name,
+            message: err.message,
+            mimeType,
+            size: blob.size
+          });
+          _cleanup();
+          chrome.runtime.sendMessage({
+            type: "AUDIO_PLAYBACK_ERROR",
+            error: `${err.name}: ${err.message}`,
+            details: {
+              mimeType,
+              sniffedMimeType: sniffed.mimeType,
+              sniffedLabel: sniffed.label,
+              size: blob.size
+            }
+          });
+        });
       });
-      return;
-    }
-
-    const blob = new Blob([bytes], { type: mimeType });
-    currentBlobUrl = URL.createObjectURL(blob);
-
-    currentAudio = new Audio();
-    currentAudio.preload = "auto";
-
-    currentAudio.onloadedmetadata = () => {
-      console.log("loadedmetadata", {
-        duration: currentAudio.duration,
-        readyState: currentAudio.readyState
-      });
-    };
-
-    currentAudio.oncanplay = () => {
-      console.log("canplay", {
-        readyState: currentAudio.readyState,
-        currentSrc: currentAudio.currentSrc
-      });
-    };
-
-    currentAudio.onended = () => {
-      _cleanup();
-      chrome.runtime.sendMessage({ type: "AUDIO_PLAYBACK_COMPLETE" });
-    };
-
-    currentAudio.onerror = () => {
-      const details = buildErrorDetails(currentAudio, mimeType, sniffed, blob.size);
-      console.error("Audio element error", details);
-      _cleanup();
-      chrome.runtime.sendMessage({
-        type: "AUDIO_PLAYBACK_ERROR",
-        error: `MediaError code=${details.mediaErrorCode} ${details.mediaErrorMessage || ""}`.trim(),
-        details
-      });
-    };
-
-    currentAudio.src = currentBlobUrl;
-    currentAudio.load();
-
-    currentAudio.play().catch((err) => {
-      console.error("Audio play() failed", {
-        name: err.name,
-        message: err.message,
-        mimeType,
-        size: blob.size
-      });
-      _cleanup();
-      chrome.runtime.sendMessage({
-        type: "AUDIO_PLAYBACK_ERROR",
-        error: `${err.name}: ${err.message}`,
-        details: {
-          mimeType,
-          sniffedMimeType: sniffed.mimeType,
-          sniffedLabel: sniffed.label,
-          size: blob.size
-        }
-      });
-    });
   } catch (e) {
     console.error("Offscreen blob/playback failure", e);
     _cleanup();

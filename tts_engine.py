@@ -74,6 +74,41 @@ class F5TTSEngine(TTSEngine):
             if os.path.exists(self.output_file):
                 with open(self.output_file, "rb") as f:
                     audio_bytes = f.read()
+
+                # Convert to browser-compatible format (16-bit stereo 44100 Hz)
+                try:
+                    import soundfile as sf
+                    import numpy as np
+
+                    # Read the audio
+                    data, sr = sf.read(self.output_file)
+
+                    # Convert to stereo if mono
+                    if len(data.shape) == 1:
+                        data = np.column_stack([data, data])
+
+                    # Resample to 44100 Hz if needed
+                    if sr != 44100:
+                        from scipy import signal
+
+                        num_samples = int(len(data) * 44100 / sr)
+                        data = signal.resample(data, num_samples)
+
+                    # Convert to 16-bit PCM
+                    data = (data * 32767).astype(np.int16)
+
+                    # Write to bytes buffer
+                    import io
+
+                    buffer = io.BytesIO()
+                    sf.write(buffer, data, 44100, format="WAV", subtype="PCM_16")
+                    buffer.seek(0)
+                    audio_bytes = buffer.read()
+
+                except ImportError:
+                    # If soundfile not available, return original
+                    logger.warning("soundfile not available, returning original audio")
+
                 return audio_bytes, "audio/wav", None
             else:
                 logger.error(f"F5-TTS output file not found: {self.output_file}")

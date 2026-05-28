@@ -84,36 +84,81 @@ SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH = 2000
 DB_PATH = Path("app.db")
 SAMPLES_DIR = Path("voice_samples")
+
+# ── Shodan security ─────────────────────────────────────────────────────
+# Compiled regex for valid IPv4 dotted-quad or bare IPv6 address
+_IP_RE = re.compile(
+    r"^(?:"
+    r"(?:\d{1,3}\.){3}\d{1,3}"  # IPv4
+    r"|"
+    r"[0-9a-fA-F:]+:[0-9a-fA-F:]+"  # IPv6
+    r")$"
+)
+
+# Compiled regex to block RFC-1918 private ranges, loopback, and IPv6 ULA
+_PRIVATE_IP_RE = re.compile(
+    r"^(?:"
+    r"10\.|"  # 10.0.0.0/8
+    r"172\.(?:1[6-9]|2[0-9]|3[0-1])\.|"  # 172.16.0.0/12
+    r"192\.168\.|"  # 192.168.0.0/16
+    r"127\.|"  # Loopback
+    r"::1$|"  # IPv6 loopback
+    r"fc00:"  # IPv6 ULA fc00::/7
+    r")"
+)
+
+# Field specification for Shodan response validation
+SHODAN_FIELD_SPEC = {
+    "ip_str": (str, 256),
+    "ports": (list, 100),
+    "org": (str, 512),
+    "country_name": (str, 512),
+    "city": (str, 256),
+    "region_code": (str, 16),
+    "country_code": (str, 8),
+    "asn": (str, 64),
+    "isp": (str, 512),
+    "hostnames": (list, 50),
+    "vulns": (list, 100),
+    "tags": (list, 50),
+    "os": (str, 128),
+    "latitude": (float, None),
+    "longitude": (float, None),
+}
 SAMPLES_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR = Path("voice_model")
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 import sqlite3
 
+
 def init_db():
     with sqlite3.connect(DB_PATH, check_same_thread=False) as conn:
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute('''CREATE TABLE IF NOT EXISTS presets (
+        conn.execute("""CREATE TABLE IF NOT EXISTS presets (
                             name TEXT PRIMARY KEY,
                             data TEXT
-                        )''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS logs (
+                        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS logs (
                             id INTEGER PRIMARY KEY AUTOINCREMENT,
                             timestamp TEXT,
                             data TEXT
-                        )''')
-        conn.execute('''CREATE TABLE IF NOT EXISTS manifest (
+                        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS manifest (
                             id INTEGER PRIMARY KEY CHECK (id = 1),
                             data TEXT
-                        )''')
+                        )""")
         conn.commit()
 
+
 init_db()
+
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
 
 _extra_origins = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
@@ -167,27 +212,72 @@ def _check_token() -> bool:
 
 def _is_valid_ip(ip: str) -> bool:
     """
-    Determine whether a string is a valid IPv4 address in dotted-decimal notation.
+    Determine whether a string is a valid IPv4 or IPv6 address and not a private/internal IP.
 
     Returns:
-        True if `ip` consists of four numeric octets each between 0 and 255, `False` otherwise.
+        True if `ip` is a valid public IP address (not RFC-1918, loopback, or IPv6 ULA), False otherwise.
     """
     if not ip:
         return False
-    try:
-        # Check if it's a valid IPv4 address
-        parts = ip.split(".")
-        if len(parts) != 4:
-            return False
-        for part in parts:
-            if not part.isdigit():
-                return False
-            num = int(part)
-            if num < 0 or num > 255:
-                return False
-        return True
-    except Exception:
+
+    # Check if it matches valid IP format (IPv4 or IPv6)
+    if not _IP_RE.match(ip):
         return False
+
+    # Block private/internal IP ranges to prevent SSRF
+    if _PRIVATE_IP_RE.match(ip):
+        return False
+
+    return True
+
+
+def _filter_shodan_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Filter and validate Shodan API response to enforce type and length constraints.
+
+    Args:
+        data: Raw Shodan API response dictionary
+
+    Returns:
+        Filtered dictionary with only allowed fields, type-coerced and length-limited
+    """
+    filtered = {}
+
+    for field, (expected_type, max_length) in SHODAN_FIELD_SPEC.items():
+        if field not in data:
+            continue
+
+        value = data[field]
+
+        # Type coercion and validation
+        try:
+            if expected_type is str:
+                if not isinstance(value, str):
+                    value = str(value)
+                # Apply length limit
+                if max_length and len(value) > max_length:
+                    value = value[:max_length]
+                filtered[field] = value
+
+            elif expected_type is list:
+                if not isinstance(value, list):
+                    continue
+                # Filter list items to primitives only and apply size limit
+                filtered_list = []
+                for item in value[:max_length] if max_length else value:
+                    if isinstance(item, (str, int, float, bool)):
+                        filtered_list.append(item)
+                filtered[field] = filtered_list
+
+            elif expected_type is float:
+                if isinstance(value, (int, float)):
+                    filtered[field] = float(value)
+
+        except (ValueError, TypeError):
+            # Skip field if type coercion fails
+            continue
+
+    return filtered
 
 
 def _analyze_text_content(text: str, raw_bytes: bytes) -> Dict[str, Any]:
@@ -434,18 +524,22 @@ def _cached_shodan_lookup(ip: str, api_key: str) -> Tuple[Dict[str, Any], int]:
         r = _requests.get(
             f"https://api.shodan.io/shodan/host/{ip}",
             params={"key": api_key},
-            timeout=10,
+            timeout=(5, 10),  # 5s connect, 10s read timeout
         )
         if r.status_code != 200:
-            return {
-                "error": f"Shodan API returned status {r.status_code}"
-            }, r.status_code
+            logger.error(f"Shodan API returned status {r.status_code}")
+            return {"error": "Shodan lookup failed"}, 502
         try:
-            return r.json(), 200
+            data = r.json()
+            # Filter and validate response to enforce type/length constraints
+            filtered_data = _filter_shodan_response(data)
+            return filtered_data, 200
         except ValueError:
-            return {"error": "Shodan API returned invalid JSON"}, 500
+            logger.error("Shodan API returned invalid JSON")
+            return {"error": "Shodan lookup failed"}, 500
     except Exception:
-        return {"error": "Internal communication error"}, 500
+        logger.exception("Shodan lookup error")
+        return {"error": "Shodan lookup failed"}, 500
 
 
 def _clear_shodan_cache() -> None:
@@ -544,12 +638,16 @@ def tts() -> Response | Tuple[Response, int]:
                 # Fetch cloned voice metadata from the database manifest
                 try:
                     conn = get_db_connection()
-                    row = conn.execute("SELECT data FROM manifest WHERE id = 1").fetchone()
+                    row = conn.execute(
+                        "SELECT data FROM manifest WHERE id = 1"
+                    ).fetchone()
                     conn.close()
                     if row:
                         manifest_data = json.loads(row["data"])
                         # voice_id contains the JSON string returned by train_from_samples
-                        if manifest_data.get("status") == "trained" and manifest_data.get("voice_id"):
+                        if manifest_data.get(
+                            "status"
+                        ) == "trained" and manifest_data.get("voice_id"):
                             ref_data = json.loads(manifest_data["voice_id"])
                             voice_settings["ref_audio"] = ref_data.get("ref_audio")
                             voice_settings["ref_text"] = ref_data.get("ref_text")
@@ -609,7 +707,7 @@ def presets() -> Response | Tuple[Response, int]:
     try:
         conn.execute(
             "INSERT INTO presets (name, data) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET data=excluded.data",
-            (data["name"], json.dumps(data))
+            (data["name"], json.dumps(data)),
         )
         conn.commit()
         conn.close()
@@ -639,7 +737,9 @@ def log_endpoint() -> Response | Tuple[Response, int]:
 
     conn = get_db_connection()
     if request.method == "GET":
-        rows = conn.execute("SELECT data FROM logs ORDER BY id DESC LIMIT 500").fetchall()
+        rows = conn.execute(
+            "SELECT data FROM logs ORDER BY id DESC LIMIT 500"
+        ).fetchall()
         entries = [json.loads(row["data"]) for row in rows]
         conn.close()
         return jsonify({"entries": entries})
@@ -653,9 +753,14 @@ def log_endpoint() -> Response | Tuple[Response, int]:
             entry["timestamp"] = entry.get(
                 "timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ")
             )
-            conn.execute("INSERT INTO logs (timestamp, data) VALUES (?, ?)", (entry["timestamp"], json.dumps(entry)))
+            conn.execute(
+                "INSERT INTO logs (timestamp, data) VALUES (?, ?)",
+                (entry["timestamp"], json.dumps(entry)),
+            )
             # Keep only last 500
-            conn.execute("DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 500)")
+            conn.execute(
+                "DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 500)"
+            )
         conn.commit()
         conn.close()
         return jsonify({"ok": True})
@@ -763,6 +868,7 @@ def train() -> Response | Tuple[Response, int]:
     saved = []
     import subprocess
     from pathlib import Path
+
     for f in files:
         if not f or not f.filename:
             continue
@@ -772,22 +878,33 @@ def train() -> Response | Tuple[Response, int]:
             continue
 
         safe_fname = (
-            secure_filename(fname) or f"clip_{int(time.time())}_{len(saved)}{Path(fname).suffix}"
+            secure_filename(fname)
+            or f"clip_{int(time.time())}_{len(saved)}{Path(fname).suffix}"
         )
 
         dest = SAMPLES_DIR / safe_fname
 
         try:
             f.save(dest)
-            
+
             if dest.suffix.lower() == ".webm":
                 wav_dest = dest.with_suffix(".wav")
                 try:
                     subprocess.run(
-                        ["ffmpeg", "-y", "-i", str(dest), "-ar", "44100", "-ac", "1", str(wav_dest)],
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-i",
+                            str(dest),
+                            "-ar",
+                            "44100",
+                            "-ac",
+                            "1",
+                            str(wav_dest),
+                        ],
                         check=True,
                         stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
+                        stderr=subprocess.DEVNULL,
                     )
                     dest.unlink()
                     dest = wav_dest
@@ -812,7 +929,10 @@ def train() -> Response | Tuple[Response, int]:
 
     conn = get_db_connection()
     try:
-        conn.execute("INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (json.dumps(manifest),))
+        conn.execute(
+            "INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            (json.dumps(manifest),),
+        )
         conn.commit()
     except Exception as e:
         logger.error(f"Failed to save manifest: {e}")
@@ -833,7 +953,10 @@ def train() -> Response | Tuple[Response, int]:
         manifest["error"] = str(e)
 
     try:
-        conn.execute("INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data", (json.dumps(manifest),))
+        conn.execute(
+            "INSERT INTO manifest (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data",
+            (json.dumps(manifest),),
+        )
         conn.commit()
     except Exception as e:
         logger.warning(f"Failed to update manifest after training: {e}")
@@ -882,7 +1005,7 @@ def _model_status() -> Dict[str, Any]:
     conn = get_db_connection()
     row = conn.execute("SELECT data FROM manifest WHERE id = 1").fetchone()
     conn.close()
-    
+
     if row:
         manifest = json.loads(row["data"])
         return {

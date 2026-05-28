@@ -1,5 +1,6 @@
 name: PR Screenshots
 
+# Trigger: Run on PR open, sync, or reopen to capture UI changes
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -8,28 +9,34 @@ jobs:
   screenshots:
     runs-on: ubuntu-latest
     env:
+      # Force Node 24 to avoid deprecation warnings
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
+      # Checkout the PR branch code
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Set up Python 3.13 for running the Flask server
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
+      # Install Python dependencies from requirements.txt
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Install Playwright and Chromium for automated screenshot capture
       - name: Install Playwright + Chromium
         run: |
           if [ ! -f package.json ]; then npm init -y; fi
           npm install playwright@latest
           npx playwright install chromium --with-deps
 
+      # Start Flask server in background and wait for it to be ready
       - name: Start Flask server
         env:
           FLASK_ENV: development
@@ -42,6 +49,7 @@ jobs:
             sleep 1
           done
 
+      # Capture screenshots of key UI endpoints and pages
       - name: Capture UI screenshots
         run: |
           mkdir -p screenshots
@@ -53,7 +61,7 @@ jobs:
               viewport: { width: 1280, height: 800 },
             });
 
-            // Helper: screenshot a URL
+            // Helper: screenshot a URL with configurable wait time
             async function shot(url, filename, waitMs = 1500) {
               const page = await context.newPage();
               try {
@@ -74,7 +82,7 @@ jobs:
               '01-health.png'
             );
 
-            // Open the static visualizer HTML
+            // Open the static visualizer HTML file directly
             const fs = require('fs');
             const path = require('path');
             const htmlPath = path.resolve('interactive_voice_visualizer.html');
@@ -88,6 +96,7 @@ jobs:
             }
 
             // ── /api/lookup live response ─────────────────────────────
+            // Test the lookup API with a live query and capture the result
             const page3 = await context.newPage();
             await page3.setContent(`
               <!DOCTYPE html><html><body style="background:#0d1117;color:#58a6ff;font-family:monospace;padding:24px">
@@ -115,6 +124,7 @@ jobs:
           })();
           EOF
 
+      # Upload screenshots as workflow artifacts for download
       - name: Upload screenshots artifact
         uses: actions/upload-artifact@v4
         with:
@@ -122,6 +132,7 @@ jobs:
           path: screenshots/
           retention-days: 14
 
+      # Post a comment to the PR with screenshot links
       - name: Post screenshot comment
         uses: actions/github-script@v7
         with:
@@ -133,17 +144,19 @@ jobs:
             const runId = context.runId;
             const artifactUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
 
-            // List captured screenshots
+            // List captured screenshots from the screenshots directory
             const dir = 'screenshots';
             let files = [];
             try { files = fs.readdirSync(dir).filter(f => f.endsWith('.png')).sort(); } catch {}
 
+            // Descriptive labels for each screenshot
             const labels = {
               '01-health.png': '🟢 Flask `/health` — server up',
               '02-visualizer.png': '🎙️ Interactive Voice Visualizer',
               '03-lookup-result.png': '🔍 `/api/lookup` live result (github.com)',
             };
 
+            // Build the comment body with screenshot table
             let body = `## 📸 Automatic Visual Preview\n\n`;
             body += `> Generated on commit \`${context.sha.slice(0,7)}\` — [full run & artifacts](${artifactUrl})\n\n`;
 
@@ -168,4 +181,5 @@ jobs:
               }
             }
 
+            // Create the new comment with screenshot information
             await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });

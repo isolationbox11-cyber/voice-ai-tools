@@ -1,10 +1,14 @@
 {
   "samples": [
-    "test_audio.wav"
+    "take_0_calm.wav",
+    "take_1_rant.wav",
+    "take_2_curious.wav",
+    "take_3_singing.wav"
   ],
   "sample_dir": "voice_samples",
-  "trained_at": "2026-05-25T20:55:22Z",
-  "count": 1,
-  "status": "training_failed",
-  "error": "'Client' object has no attribute 'voices'"
+  "trained_at": "2026-05-25T22:30:00Z",
+  "count": 4,
+  "status": "ready",
+  "engine": "f5-tts",
+  "voice_id": "f5_cloned"
 }

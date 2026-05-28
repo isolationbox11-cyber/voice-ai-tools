@@ -116,6 +116,51 @@
         min-height: 4px;
         transition: height 0.1s;
       }
+      .visualizer .bar:nth-child(1) {
+        height: 12px;
+      }
+      .visualizer .bar:nth-child(2) {
+        height: 24px;
+      }
+      .visualizer .bar:nth-child(3) {
+        height: 18px;
+      }
+      .visualizer .bar:nth-child(4) {
+        height: 36px;
+      }
+      .visualizer .bar:nth-child(5) {
+        height: 28px;
+      }
+      .visualizer .bar:nth-child(6) {
+        height: 44px;
+      }
+      .visualizer .bar:nth-child(7) {
+        height: 32px;
+      }
+      .visualizer .bar:nth-child(8) {
+        height: 20px;
+      }
+      .visualizer .bar:nth-child(9) {
+        height: 38px;
+      }
+      .visualizer .bar:nth-child(10) {
+        height: 14px;
+      }
+      .visualizer .bar:nth-child(11) {
+        height: 26px;
+      }
+      .visualizer .bar:nth-child(12) {
+        height: 50px;
+      }
+      .visualizer .bar:nth-child(13) {
+        height: 30px;
+      }
+      .visualizer .bar:nth-child(14) {
+        height: 16px;
+      }
+      .visualizer .bar:nth-child(15) {
+        height: 22px;
+      }
       textarea {
         width: 100%;
         background: var(--panel);
@@ -492,7 +537,28 @@
         background: rgba(76, 201, 240, 0.05);
         color: var(--accent);
       }
+      .pdf-hint {
+        font-size: 0.68rem;
+        color: rgba(76, 201, 240, 0.5);
+      }
+      .hidden-file-input {
+        display: none;
+      }
+      .pdf-result-box {
+        min-height: 60px;
+      }
       /* LOG */
+      .log-header-row {
+        margin-bottom: 12px;
+      }
+      .log-header-label {
+        margin: 0;
+        line-height: 2;
+      }
+      .clear-log-btn {
+        flex: 0;
+        padding: 4px 12px;
+      }
       .log-list {
         display: flex;
         flex-direction: column;
@@ -561,21 +627,21 @@
     <!-- VOICE -->
     <div class="panel active" id="panel-voice">
       <div class="visualizer" id="visualizer">
-        <div class="bar" style="height: 12px"></div>
-        <div class="bar" style="height: 24px"></div>
-        <div class="bar" style="height: 18px"></div>
-        <div class="bar" style="height: 36px"></div>
-        <div class="bar" style="height: 28px"></div>
-        <div class="bar" style="height: 44px"></div>
-        <div class="bar" style="height: 32px"></div>
-        <div class="bar" style="height: 20px"></div>
-        <div class="bar" style="height: 38px"></div>
-        <div class="bar" style="height: 14px"></div>
-        <div class="bar" style="height: 26px"></div>
-        <div class="bar" style="height: 50px"></div>
-        <div class="bar" style="height: 30px"></div>
-        <div class="bar" style="height: 16px"></div>
-        <div class="bar" style="height: 22px"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
+        <div class="bar"></div>
       </div>
       <div class="voice-mode-row">
         <button class="mode-btn active" id="btn-mode-cloned">My Voice</button>
@@ -583,12 +649,12 @@
       </div>
       <div class="voice-status" id="voice-status">Ready</div>
       <div class="row">
-        <select id="voice-speed">
+        <select id="voice-speed" title="Voice Speed">
           <option value="normal">Normal Speed</option>
           <option value="slow">Slow</option>
           <option value="fast">Fast</option>
         </select>
-        <select id="voice-lang">
+        <select id="voice-lang" title="Voice Language">
           <option value="en-US">English (US)</option>
           <option value="en-GB">English (UK)</option>
           <option value="es-ES">Spanish</option>
@@ -701,28 +767,26 @@
       </div>
       <div class="section-label">Drop PDF to Analyze</div>
       <div class="pdf-drop" id="pdf-drop">
-        Drop a PDF here or click to select<br /><span
-          style="font-size: 0.68rem; color: rgba(76, 201, 240, 0.5)"
+        Drop a PDF here or click to select<br /><span class="pdf-hint"
           >.pdf -- extracts links, metadata, embedded IPs</span
         >
       </div>
-      <input type="file" id="pdf-file" accept=".pdf" style="display: none" />
-      <div class="result-box" id="pdf-result" style="min-height: 60px">
+      <input
+        type="file"
+        id="pdf-file"
+        accept=".pdf"
+        class="hidden-file-input"
+      />
+      <div class="result-box pdf-result-box" id="pdf-result">
         PDF analysis output...
       </div>
     </div>
 
     <!-- LOG -->
     <div class="panel" id="panel-log">
-      <div class="row" style="margin-bottom: 12px">
-        <div class="section-label" style="margin: 0; line-height: 2">
-          Session Log
-        </div>
-        <button
-          class="btn btn-sm btn-warn"
-          id="btn-clear-log"
-          style="flex: 0; padding: 4px 12px"
-        >
+      <div class="row log-header-row">
+        <div class="section-label log-header-label">Session Log</div>
+        <button class="btn btn-sm btn-warn clear-log-btn" id="btn-clear-log">
           Clear
         </button>
       </div>
