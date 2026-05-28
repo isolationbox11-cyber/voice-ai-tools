@@ -72,6 +72,18 @@ All endpoints except `/health` require the `X-Voice-Token` header when `VOICE_SE
 - Always set `VOICE_SERVER_TOKEN` in any non-local deployment.
 - Private/loopback IPs are blocked on `/api/lookup` to prevent SSRF.
 - Error messages are sanitized before returning to clients — API keys and stack traces are never leaked.
+- Consider enabling `ENABLE_REQUEST_SIGNING=true` for replay protection in production.
+
+## Production Deployment
+
+For production deployment, see [DEPLOYMENT.md](DEPLOYMENT.md) which covers:
+
+- Environment configuration best practices
+- Security hardening
+- Deployment options (systemd, Docker, cloud)
+- Monitoring and maintenance
+- Backup and recovery procedures
+- Troubleshooting common issues
 
 ## Requirements
 

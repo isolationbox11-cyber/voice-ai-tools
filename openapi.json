@@ -160,7 +160,7 @@
       "post": {
         "summary": "Synthesize speech from text",
         "description": "Converts text to speech using configured TTS engine",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -220,7 +220,7 @@
       "get": {
         "summary": "Get voice presets",
         "description": "Retrieve saved voice presets",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "responses": {
           "200": {
             "description": "Voice presets",
@@ -247,7 +247,7 @@
       "post": {
         "summary": "Save voice presets",
         "description": "Save voice presets configuration",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -286,7 +286,7 @@
       "get": {
         "summary": "Get session log",
         "description": "Retrieve session activity log",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "responses": {
           "200": {
             "description": "Session log",
@@ -316,7 +316,7 @@
       "post": {
         "summary": "Append to session log",
         "description": "Add an entry to the session log",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -365,7 +365,7 @@
       "post": {
         "summary": "Clear session log",
         "description": "Clear all session log entries",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "responses": {
           "200": {
             "description": "Log cleared",
@@ -394,7 +394,7 @@
       "get": {
         "summary": "Shodan host lookup",
         "description": "Query Shodan for host information (requires SHODAN_API_KEY)",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "parameters": [
           {
             "name": "ip",
@@ -444,7 +444,7 @@
       "post": {
         "summary": "Analyze PDF file",
         "description": "Extract metadata, links, IPs, and detect suspicious patterns from PDF",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -499,7 +499,7 @@
       "post": {
         "summary": "Train voice model",
         "description": "Upload audio samples for voice training",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -565,7 +565,7 @@
       "get": {
         "summary": "Get voice model status",
         "description": "Check voice model training status",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "responses": {
           "200": {
             "description": "Model status",
@@ -590,11 +590,257 @@
         }
       }
     },
+    "/cloned_status": {
+      "get": {
+        "summary": "Check cloned voice status",
+        "description": "Check if cloned voice is available and whether it uses fallback engine",
+        "security": [{ "tokenAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Cloned voice status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "engine": {
+                      "type": "string"
+                    },
+                    "requires_coqui": {
+                      "type": "boolean"
+                    },
+                    "coqui_installed": {
+                      "type": "boolean"
+                    },
+                    "warning": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backup": {
+      "post": {
+        "summary": "Create backup",
+        "description": "Create a backup of voice embeddings, samples, and configuration",
+        "security": [{ "tokenAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backup created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "backup_path": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Backup manager not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "List backups",
+        "description": "List all available backups",
+        "security": [{ "tokenAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of backups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "backups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backup/restore": {
+      "post": {
+        "summary": "Restore backup",
+        "description": "Restore from a backup file",
+        "security": [{ "tokenAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["backup_path"],
+                "properties": {
+                  "backup_path": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restore results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/backup/<backup_name>": {
+      "delete": {
+        "summary": "Delete backup",
+        "description": "Delete a specific backup",
+        "security": [{ "tokenAuth": [] }],
+        "parameters": [
+          {
+            "name": "backup_name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Backup deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Backup not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/lookup": {
       "post": {
         "summary": "OSINT lookup",
         "description": "Perform OSINT lookup for domain, IP, or phone number",
-        "security": [{"tokenAuth": []}],
+        "security": [{ "tokenAuth": [] }],
         "requestBody": {
           "required": true,
           "content": {

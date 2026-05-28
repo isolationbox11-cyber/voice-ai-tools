@@ -841,6 +841,152 @@ def cloned_status():
         ), 500
 
 
+# ── /backup ───────────────────────────────────────────────────────────
+@app.route("/backup", methods=["POST"])
+def create_backup():
+    """Create a backup of voice data."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    if not _BACKUP_OK:
+        return jsonify({"error": "Backup manager not available"}), 503
+
+    try:
+        data = request.get_json(silent=True) or {}
+        name = data.get("name")
+        backup_path = _backup_manager.BackupManager().create_backup(name)
+        return jsonify({"backup_path": backup_path, "status": "created"})
+    except Exception as e:
+        logger.exception("Backup creation failed")
+        return jsonify({"error": "Backup creation failed"}), 500
+
+
+@app.route("/backup", methods=["GET"])
+def list_backups():
+    """List all available backups."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    if not _BACKUP_OK:
+        return jsonify({"error": "Backup manager not available"}), 503
+
+    try:
+        backups = _backup_manager.BackupManager().list_backups()
+        return jsonify({"backups": backups})
+    except Exception as e:
+        logger.exception("Backup listing failed")
+        return jsonify({"error": "Backup listing failed"}), 500
+
+
+@app.route("/backup/restore", methods=["POST"])
+def restore_backup():
+    """Restore from a backup."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    if not _BACKUP_OK:
+        return jsonify({"error": "Backup manager not available"}), 503
+
+    try:
+        data = request.get_json(silent=True) or {}
+        backup_path = data.get("backup_path")
+        if not backup_path:
+            return jsonify({"error": "backup_path is required"}), 400
+
+        results = _backup_manager.BackupManager().restore_backup(backup_path)
+        return jsonify(results)
+    except Exception as e:
+        logger.exception("Backup restoration failed")
+        return jsonify({"error": "Backup restoration failed"}), 500
+
+
+@app.route("/backup/<backup_name>", methods=["DELETE"])
+def delete_backup(backup_name):
+    """Delete a specific backup."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    if not _BACKUP_OK:
+        return jsonify({"error": "Backup manager not available"}), 503
+
+    try:
+        deleted = _backup_manager.BackupManager().delete_backup(backup_name)
+        if deleted:
+            return jsonify({"status": "deleted", "backup_name": backup_name})
+        else:
+            return jsonify({"error": "Backup not found"}), 404
+    except Exception as e:
+        logger.exception("Backup deletion failed")
+        return jsonify({"error": "Backup deletion failed"}), 500
+    """Check if cloned voice is available and whether it uses fallback engine."""
+    auth_error = _require_auth()
+    if auth_error:
+        return auth_error
+
+    try:
+        import importlib
+
+        cvc = importlib.import_module("custom_voice_config")
+        has_custom_voice = (
+            hasattr(cvc, "CUSTOM_VOICE_SAMPLES") and cvc.CUSTOM_VOICE_SAMPLES
+        )
+
+        result = {
+            "available": has_custom_voice,
+            "engine": "unknown",
+            "requires_coqui": False,
+            "coqui_installed": False,
+            "warning": None,
+        }
+
+        if has_custom_voice:
+            # Check if we have local_voice_* embeddings
+            import json
+            from pathlib import Path
+
+            embeddings_root = Path("voice_embeddings").resolve()
+            if embeddings_root.exists():
+                embedding_files = list(embeddings_root.glob("local_voice_*.json"))
+                if embedding_files:
+                    # Check the first embedding for engine type
+                    data = json.loads(embedding_files[0].read_text())
+                    engine = data.get("engine", "fallback")
+                    result["engine"] = engine
+                    result["requires_coqui"] = engine == "coqui_xtts_v2"
+
+                    # Check if Coqui is installed
+                    try:
+                        import voice_training
+
+                        result["coqui_installed"] = (
+                            voice_training._get_coqui_model() is not None
+                        )
+                    except Exception:
+                        result["coqui_installed"] = False
+
+                    # Generate warning if needed
+                    if result["requires_coqui"] and not result["coqui_installed"]:
+                        result["warning"] = (
+                            "Voice cloning requires Coqui TTS (pip install TTS). Default voice will be used instead."
+                        )
+
+        return jsonify(result)
+
+    except ImportError:
+        return jsonify(
+            {"available": False, "warning": "Custom voice configuration not found"}
+        )
+    except Exception as e:
+        logger.exception("Error checking cloned status")
+        return jsonify(
+            {"available": False, "warning": "Failed to check voice status"}
+        ), 500
+
+
 def _model_status():
     manifest_path = MODEL_DIR / "manifest.json"
     if manifest_path.exists():
