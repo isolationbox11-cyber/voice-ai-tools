@@ -13,7 +13,7 @@ Env vars:
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-import os, io, re, json, time, wave, tempfile, importlib, sys, threading
+import os, io, re, json, time, uuid, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
@@ -428,7 +428,7 @@ def analyze_pdf():
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
                 result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-                return jsonify(result)
+                return jsonify(_filter_lookup_result(result))
         except Exception:
             pass
 
@@ -445,7 +445,7 @@ def analyze_pdf():
             result["links"]      = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-            return jsonify(result)
+            return jsonify(_filter_lookup_result(result))
         except Exception:
             app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
             return jsonify({"error": "Failed to analyze PDF"}), 500
@@ -456,7 +456,7 @@ def analyze_pdf():
     result["links"]      = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
     result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
-    return jsonify(result)
+    return jsonify(_filter_lookup_result(result))
 
 
 # ── /train ────────────────────────────────────────────────────────────
@@ -589,7 +589,7 @@ def api_lookup():
 
     try:
         result = _lookup_engine.lookup(query)
-        return jsonify(result)
+        return jsonify(_filter_lookup_result(result))
     except Exception as exc:
         print(f"Lookup failed for {query!r}: {exc}", file=sys.stderr)
         return jsonify({"error": "Lookup failed"}), 500
