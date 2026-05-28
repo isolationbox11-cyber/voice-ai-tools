@@ -1,21 +1,30 @@
-flask>=3.0.3,<4.0.0
-flask-cors>=6.0.0,<7.0.0
-flask-limiter>=3.5.1,<4.0.0
-google-genai>=0.8.0,<1.0.0
-python-dotenv>=1.2.2,<2.0.0
-pdfplumber>=0.11.0,<1.0.0
-PyPDF2>=3.0.1,<4.0.0
-requests>=2.32.3,<3.0.0
-soundfile>=0.12.1,<1.0.0
-torch>=2.8.0,<3.0.0
-dnspython>=2.4.0,<3.0.0
-python-whois>=0.9.0,<1.0.0
-phonenumbers>=8.13.0,<9.0.0
-TTS>=0.22.0,<1.0.0  # Optional: for local voice cloning (Coqui XTTS v2)
-psutil>=5.9.0,<6.0.0  # Optional: for enhanced health monitoring
-pytest>=7.4.0,<8.0.0  # Testing framework
-pytest-cov>=4.1.0,<5.0.0  # Test coverage reporting
-pytest-flask>=1.2.0,<2.0.0  # Flask testing utilities
-pydantic>=2.0.0,<3.0.0  # Configuration validation
-pydantic-settings>=2.0.0,<3.0.0  # Environment variable management
-structlog>=23.0.0,<24.0.0  # Structured logging
+# Core Flask server
+flask>=3.1.3
+flask-cors>=6.0.0
+flask-limiter>=3.5.1
+python-dotenv>=1.2.2
+requests>=2.33.0
+
+# Google Gemini TTS
+google-genai>=0.8.0
+
+# PDF analysis
+pdfplumber>=0.11.0
+PyPDF2>=3.0.1
+Pillow>=12.2.0
+
+# Audio file type detection (optional but recommended)
+python-magic>=0.4.27
+
+# Audio I/O
+soundfile>=0.12.1
+
+# OSINT lookups
+dnspython>=2.6.1
+python-whois>=0.9.0
+phonenumbers>=8.13.0
+
+# Voice model training — heavy (installs PyTorch ~2GB)
+# Only needed if you use the /train endpoint with local Coqui XTTS.
+# Install separately: pip install torch>=2.12.0
+# torch>=2.12.0

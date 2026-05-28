@@ -1,53 +1,28 @@
 #!/usr/bin/env python3
 """
 Voice AI Tools - Flask Backend
-Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status /api/lookup
+Endpoints: /health /tts /presets /log /shodan /analyze_pdf /train /model_status /api/lookup /cloned_status
 
 Env vars:
   GOOGLE_API_KEY        - Gemini API key (for TTS) [required]
   VOICE_SERVER_TOKEN    - shared secret (X-Voice-Token header) [optional in dev]
   SHODAN_API_KEY        - Shodan API key (optional)
-  ALLOWED_ORIGINS       - comma-separated extra CORS origins (e.g. chrome-extension://YOUR_ID)
+  ALLOWED_ORIGINS       - comma-separated extra CORS origins
   PORT                  - bind port (default 5001)
-  ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST (unsafe; logs a warning)
+  ALLOW_NETWORK_BINDING - set to "1" to allow non-loopback HOST
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
-# v2 - security hardened
-import os
-import io
-import re
-import json
-import time
-import importlib
-import sys
-import threading
-import logging
-import hmac
-import hashlib
-import contextlib
+import os, io, re, json, time, uuid, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
+load_dotenv()
 
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_file
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-load_dotenv()
-
-# Setup logging
-logger = logging.getLogger(__name__)
-
-# Optional monitoring dependency
-try:
-    import psutil
-
-    HAS_PSUTIL = True
-except ImportError:
-    HAS_PSUTIL = False
-
-# ── optional heavy deps ───────────────────────────────────────────────
 try:
     import requests as _requests
 except ImportError:
@@ -70,7 +45,6 @@ except ImportError:
 
 try:
     import tts_engine as _tts_engine
-
     synthesize_speech = _tts_engine.synthesize_speech
     TTS_MAX_TEXT_LENGTH = getattr(_tts_engine, "MAX_TEXT_LENGTH", 2000)
 except ImportError:
@@ -84,47 +58,25 @@ except ImportError:
 
 try:
     import lookup_engine as _lookup_engine
-
     _LOOKUP_OK = True
 except ImportError:
     _lookup_engine = None
     _LOOKUP_OK = False
 
-try:
-    import backup_manager as _backup_manager
-
-    _BACKUP_OK = True
-except ImportError:
-    _backup_manager = None
-    _BACKUP_OK = False
-
-# ── config ────────────────────────────────────────────────────────────
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
-SHODAN_API_KEY = os.environ.get("SHODAN_API_KEY", "")
-MAX_TEXT_LENGTH = TTS_MAX_TEXT_LENGTH
+SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
+MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
-# 512 bytes is sufficient to read a complete ftyp box in MP4/M4A containers
-# and the fixed-size magic headers used by WAV, MP3, OGG, FLAC, and WebM.
 AUDIO_HEADER_READ_SIZE = 512
-PRESET_PATH = Path("voice_presets.json")
-LOG_PATH = Path("session_log.json")
-MODEL_DIR = Path("voice_model")
-SAMPLES_DIR = Path("voice_samples")
-PRESET_WRITE_LOCK = threading.Lock()
+PRESET_PATH        = Path("voice_presets.json")
+LOG_PATH           = Path("session_log.json")
+MODEL_DIR          = Path("voice_model")
+SAMPLES_DIR        = Path("voice_samples")
+PRESET_WRITE_LOCK  = threading.Lock()
 SHODAN_SAFE_FIELDS = ("ip_str", "ports", "org", "country_name")
-SERVER_START_TIME = time.time()
+SERVER_START_TIME  = time.time()
 SAMPLES_DIR.mkdir(exist_ok=True)
 MODEL_DIR.mkdir(exist_ok=True)
-
-# Request signing configuration
-ENABLE_REQUEST_SIGNING = (
-    os.environ.get("ENABLE_REQUEST_SIGNING", "false").lower() == "true"
-)
-SIGNING_TOLERANCE_SECONDS = int(
-    os.environ.get("SIGNING_TOLERANCE_SECONDS", "300")
-)  # 5 minutes default
-_signature_nonce_cache = {}
-_signature_nonce_lock = threading.Lock()
 
 _GEMINI_DEFAULT_VOICE = "Kore"
 
@@ -133,16 +85,11 @@ if not VOICE_SERVER_TOKEN:
     if flask_env == "production":
         raise RuntimeError("VOICE_SERVER_TOKEN must be set when FLASK_ENV=production")
     print(
-        "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode. "
-        "All protected endpoints are accessible without a token.\n"
-        "Set VOICE_SERVER_TOKEN in production to enable auth.",
+        "INFO: VOICE_SERVER_TOKEN not set — running in open dev mode.",
         file=sys.stderr,
     )
 
-# ── CORS ──────────────────────────────────────────────────────────────
-_extra_origins = [
-    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()
-]
+_extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = [
     "http://127.0.0.1:5001",
     "http://localhost:5001",
@@ -151,140 +98,33 @@ ALLOWED_ORIGINS = [
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Voice-Token"])
-
-# Per-endpoint rate limiting configuration
-rate_limit_config = {
-    "default": "200 per minute",
-    "tts": "30 per minute",
-    "train": "5 per minute",
-    "shodan": "10 per minute",
-    "lookup": "20 per minute",
-    "backup": "10 per minute",
-}
-
-limiter = Limiter(
-    get_remote_address, app=app, default_limits=[rate_limit_config["default"]]
-)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
 
 
 def _safe_public_error_message(raw_error) -> str:
-    """Avoid returning stack traces or multi-line internals to clients."""
     msg = str(raw_error or "").strip().lower()
-    if any(
-        token in msg
-        for token in (
-            "api key missing",
-            "missing api key",
-            "api key not configured",
-            "apikey missing",
-            "apikey not configured",
-            "invalid api key",
-            "api key invalid",
-            "unauthorized",
-            "authentication failed",
-        )
-    ):
+    if any(t in msg for t in ("api key missing", "missing api key", "api key not configured",
+                               "apikey missing", "apikey not configured", "invalid api key",
+                               "api key invalid", "unauthorized", "authentication failed")):
         return "API key not configured"
-    if any(
-        token in msg
-        for token in (
-            "voice model unavailable",
-            "voice model not found",
-            "voice not found",
-            "model not found",
-            "voice unavailable",
-            "model unavailable",
-            "unsupported voice",
-            "unsupported model",
-            "invalid voice",
-            "invalid model",
-        )
-    ):
+    if any(t in msg for t in ("voice model unavailable", "voice model not found", "voice not found",
+                               "model not found", "voice unavailable", "model unavailable",
+                               "unsupported voice", "unsupported model", "invalid voice", "invalid model")):
         return "Voice model unavailable"
-    if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
+    if any(t in msg for t in ("timeout", "timed out", "deadline exceeded")):
         return "Request timed out"
     return "Speech synthesis failed"
-
-
-def _validate_request_signature() -> tuple[bool, str]:
-    """Validate HMAC signature for replay protection.
-
-    Expected headers:
-      X-Voice-Token: the shared secret
-      X-Signature-Timestamp: Unix timestamp
-      X-Signature-Nonce: unique value for this request
-      X-Signature: HMAC-SHA256(token + timestamp + nonce, request_body)
-
-    Returns:
-      (is_valid, error_message)
-    """
-    # Ensure nonce cache is initialized (safety check for linter)
-    global _signature_nonce_cache
-    if "_signature_nonce_cache" not in globals():
-        _signature_nonce_cache = {}
-
-    if not ENABLE_REQUEST_SIGNING or not VOICE_SERVER_TOKEN:
-        return True, ""  # Signing disabled, skip validation
-
-    token = request.headers.get("X-Voice-Token", "")
-    timestamp_str = request.headers.get("X-Signature-Timestamp", "")
-    nonce = request.headers.get("X-Signature-Nonce", "")
-    signature = request.headers.get("X-Signature", "")
-
-    if not all([token, timestamp_str, nonce, signature]):
-        return False, "Missing required signature headers"
-
-    try:
-        timestamp = int(timestamp_str)
-        current_time = int(time.time())
-
-        # Check timestamp is within tolerance
-        if abs(current_time - timestamp) > SIGNING_TOLERANCE_SECONDS:
-            return False, "Request timestamp too old or too new"
-
-        # Check nonce hasn't been used before (replay protection)
-        with _signature_nonce_lock:
-            if nonce in _signature_nonce_cache:
-                return False, "Replay detected: nonce already used"
-
-            # Store nonce with timestamp for cleanup
-            _signature_nonce_cache[nonce] = timestamp
-
-            # Clean up old nonces (older than 2x tolerance)
-            cutoff = current_time - (SIGNING_TOLERANCE_SECONDS * 2)
-            _signature_nonce_cache = {
-                k: v for k, v in _signature_nonce_cache.items() if v > cutoff
-            }
-
-        # Calculate expected signature
-        request_body = request.get_data(as_text=True)
-        message = f"{token}{timestamp}{nonce}{request_body}"
-
-        expected_signature = hmac.new(
-            VOICE_SERVER_TOKEN.encode(), message.encode(), hashlib.sha256
-        ).hexdigest()
-
-        # Use constant-time comparison to prevent timing attacks
-        if not hmac.compare_digest(signature, expected_signature):
-            return False, "Invalid signature"
-
-        return True, ""
-
-    except (ValueError, TypeError):
-        return False, "Invalid timestamp format"
-    except Exception:
-        logger.error("Signature validation error")
-        return False, "Signature validation failed"
 
 
 def _validate_log_entry(data):
     if not isinstance(data, dict):
         return None, "Invalid JSON body"
     allowed_keys = {"action", "timestamp", "text"}
-    if unknown_keys := set(data.keys()) - allowed_keys:
+    unknown_keys = set(data.keys()) - allowed_keys
+    if unknown_keys:
         return None, f"Unknown fields: {', '.join(sorted(unknown_keys))}"
-    action = data.get("action")
-    text = data.get("text")
+    action    = data.get("action")
+    text      = data.get("text")
     timestamp = data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ"))
     if not isinstance(action, str) or not action.strip():
         return None, "action is required"
@@ -292,48 +132,16 @@ def _validate_log_entry(data):
         return None, "text is required"
     if not isinstance(timestamp, str) or not timestamp.strip():
         return None, "timestamp must be a non-empty string"
-    entry = {
-        "action": action.strip(),
-        "timestamp": timestamp.strip(),
-        "text": text.strip(),
-    }
+    entry = {"action": action.strip(), "timestamp": timestamp.strip(), "text": text.strip()}
     if len(json.dumps(entry, ensure_ascii=False).encode("utf-8")) > MAX_LOG_ENTRY_SIZE:
         return None, f"log entry exceeds maximum size of {MAX_LOG_ENTRY_SIZE} bytes"
     return entry, None
 
 
-# ── auth ──────────────────────────────────────────────────────────────
-def _check_token() -> tuple[bool, str]:
-    """Check token and optionally validate request signature.
-
-    Returns:
-      (is_authenticated, error_message)
-    """
+def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
-        return True, ""
-
-    # Check token
-    if request.headers.get("X-Voice-Token", "") != VOICE_SERVER_TOKEN:
-        return False, "Invalid token"
-
-    # Check signature if enabled
-    if ENABLE_REQUEST_SIGNING:
-        is_valid, error_msg = _validate_request_signature()
-        if not is_valid:
-            return False, error_msg
-
-    return True, ""
-
-
-def _require_auth():
-    """Wrapper to enforce authentication on protected endpoints.
-
-    Returns 401 response if authentication fails, otherwise returns None.
-    """
-    is_auth, error_msg = _check_token()
-    if not is_auth:
-        return jsonify({"error": error_msg or "Authentication required"}), 401
-    return None
+        return True
+    return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
 
 
 def _is_audio_upload(file_storage) -> bool:
@@ -358,161 +166,110 @@ def _is_audio_upload(file_storage) -> bool:
             detected_mime = ""
     if detected_mime.startswith("audio/"):
         return True
-    # Container-based magic-byte checks for common training clip formats.
-    # These are evaluated even when python-magic is present so that audio-only
-    # containers (e.g. M4A / MP4 audio) that libmagic reports as "video/mp4"
-    # are still accepted by combining the MIME result with the byte-level check.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
-        return True  # WAV
+        return True
     if header.startswith(b"ID3"):
-        return True  # MP3 (ID3-tagged)
+        return True
     if len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
-        return True  # MP3 (raw frame sync)
+        return True
     if header.startswith(b"OggS"):
-        return True  # OGG
+        return True
     if header.startswith(b"fLaC"):
-        return True  # FLAC
-    if header.startswith(b"\x1a\x45\xdf\xa3"):
-        return True  # WebM/Matroska (audio/webm)
+        return True
+    if header.startswith(b"\x1A\x45\xDF\xA3"):
+        return True
     if len(header) >= 16 and header[4:8] == b"ftyp":
         major_brand = header[8:12]
-        compatible_brands = {header[i : i + 4] for i in range(16, len(header) - 3, 4)}
+        compatible_brands = {header[i:i + 4] for i in range(16, len(header) - 3, 4)}
         if major_brand in {b"M4A ", b"M4B "}:
-            return True  # M4A/MP4 audio containers
+            return True
         if {b"M4A ", b"M4B "} & compatible_brands:
-            return True  # M4A/MP4 audio containers
-        # Accept any valid MP4 container when python-magic has already identified
-        # the file as video/mp4, since audio-only MP4s are commonly reported with
-        # that MIME type by libmagic (e.g. files with "mp42"/"isom" major brands).
+            return True
         if detected_mime.startswith("video/mp4"):
             return True
     return False
 
 
-# ── voice-settings resolution ─────────────────────────────────────────
-def _resolve_voice_settings(call_type: str) -> dict:
-    with contextlib.suppress(Exception):
-        custom = importlib.import_module("custom_voice_config")
-        fn = getattr(custom, "get_custom_voice_settings", None)
-        if callable(fn):
-            result = fn(call_type or "LEGITIMATE")
-            if isinstance(result, dict):
-                resolved = dict(result)
-                if not resolved.get("voice_id"):
-                    resolved["voice_id"] = getattr(
-                        custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE
-                    )
-                return resolved
-    with contextlib.suppress(Exception):
-        if callable(_default_voice_fn):
-            result = _default_voice_fn(call_type or "LEGITIMATE")
-            if isinstance(result, dict):
-                resolved = dict(result)
-                if not resolved.get("voice_id"):
-                    resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
-                return resolved
-    return {"voice_id": _GEMINI_DEFAULT_VOICE}
+_LOOKUP_STRIP_KEYS = {"raw", "_internal", "stack", "traceback"}
 
 
-# ── /api/docs ─────────────────────────────────────────────────────────
-@app.route("/api/docs")
-def api_docs():
-    """Serve OpenAPI/Swagger documentation."""
-    try:
-        with open("openapi.json", "r") as f:
-            return jsonify(json.load(f))
-    except FileNotFoundError:
-        return jsonify({"error": "API documentation not found"}), 404
-    except Exception:
-        return jsonify({"error": "API documentation not available"}), 404
+def _sanitize_value(v):
+    if isinstance(v, dict):
+        return {k: _sanitize_value(vv) for k, vv in v.items() if k not in _LOOKUP_STRIP_KEYS}
+    if isinstance(v, list):
+        return [_sanitize_value(i) for i in v]
+    return v
 
 
-# ── /health ───────────────────────────────────────────────────────────
+def _filter_lookup_result(result: dict) -> dict:
+    if not isinstance(result, dict):
+        app.logger.warning("_filter_lookup_result received non-dict: %s", type(result))
+        return {}
+    return {k: _sanitize_value(v) for k, v in result.items() if k not in _LOOKUP_STRIP_KEYS}
+
+
+def _filter_pdf_result(result: dict) -> dict:
+    _PDF_ALLOWED_KEYS = {"metadata", "links", "ips", "suspicious", "pages"}
+    if not isinstance(result, dict):
+        app.logger.warning("_filter_pdf_result received non-dict: %s", type(result))
+        return {}
+    return {k: result[k] for k in _PDF_ALLOWED_KEYS if k in result}
+
+
 @app.route("/health")
 def health():
-    health_data = {
+    return jsonify({
         "status": "ok",
         "tts_engine": synthesize_speech is not None,
         "api_key_configured": bool(os.environ.get("GOOGLE_API_KEY", "").strip()),
         "auth_enabled": bool(VOICE_SERVER_TOKEN),
         "uptime_seconds": int(time.time() - SERVER_START_TIME),
-    }
-
-    # Add optional detailed monitoring
-    if HAS_PSUTIL:
-        try:
-            process = psutil.Process()
-            health_data.update(
-                {
-                    "memory_mb": round(process.memory_info().rss / 1024 / 1024, 2),
-                    "cpu_percent": process.cpu_percent(),
-                    "thread_count": process.num_threads(),
-                }
-            )
-            # Disk space for voice samples and models
-            try:
-                disk_usage = psutil.disk_usage(str(SAMPLES_DIR.parent))
-                health_data["disk_gb_free"] = round(
-                    disk_usage.free / 1024 / 1024 / 1024, 2
-                )
-                health_data["disk_gb_total"] = round(
-                    disk_usage.total / 1024 / 1024 / 1024, 2
-                )
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-    # Voice model statistics
-    with contextlib.suppress(Exception):
-        embedding_dir = Path("voice_embeddings")
-        if embedding_dir.exists():
-            embeddings = list(embedding_dir.glob("*.json"))
-            health_data["voice_embeddings_count"] = len(embeddings)
-
-    # Sample files count
-    with contextlib.suppress(Exception):
-        samples = list(SAMPLES_DIR.glob("*")) if SAMPLES_DIR.exists() else []
-        health_data["voice_samples_count"] = len([f for f in samples if f.is_file()])
-
-    # Coqui model status
-    with contextlib.suppress(Exception):
-        import voice_training
-
-        health_data["coqui_model_available"] = (
-            voice_training._get_coqui_model() is not None
-        )
-
-    # Optional dependencies status
-    health_data["optional_deps"] = {
-        "shodan": _requests is not None and bool(SHODAN_API_KEY),
-        "pdf_analysis": pdfplumber is not None,
-        "osint_lookup": _LOOKUP_OK,
-    }
-
-    return jsonify(health_data)
+    })
 
 
-# ── /tts ──────────────────────────────────────────────────────────────
+@app.route("/cloned_status")
+def cloned_status():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        if "custom_voice_config" in sys.modules:
+            importlib.reload(sys.modules["custom_voice_config"])
+        custom = importlib.import_module("custom_voice_config")
+        voice_id = getattr(custom, "CUSTOM_VOICE_ID", None)
+        engine   = getattr(custom, "CUSTOM_VOICE_ENGINE", None)
+        if not voice_id:
+            return jsonify({"available": False, "reason": "no voice_id in config"})
+        if engine == "fallback":
+            return jsonify({
+                "available": False,
+                "reason": (
+                    "Voice samples were saved but Coqui TTS is not installed. "
+                    "Run: pip install TTS  then re-train."
+                ),
+                "voice_id": voice_id,
+                "engine": engine,
+            })
+        return jsonify({"available": True, "voice_id": voice_id, "engine": engine})
+    except ImportError:
+        pass
+    return jsonify({"available": False, "reason": "no trained voice found"})
+
+
 @app.route("/tts", methods=["POST"])
-@limiter.limit(rate_limit_config["tts"])
+@limiter.limit("30 per minute")
 def tts():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
-    if not (text := (data.get("text") or "").strip()):
+    text = (data.get("text") or "").strip()
+    if not text:
         return jsonify({"error": "text is required"}), 400
     if len(text) > MAX_TEXT_LENGTH:
-        return jsonify(
-            {"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH} characters"}
-        ), 400
+        return jsonify({"error": f"text exceeds maximum length of {MAX_TEXT_LENGTH} characters"}), 400
     if synthesize_speech is None:
-        return jsonify(
-            {"error": "TTS engine not available — install google-genai"}
-        ), 503
+        return jsonify({"error": "TTS engine not available — install google-genai"}), 503
     try:
         call_type = data.get("call_type")
         if isinstance(call_type, str):
@@ -537,18 +294,17 @@ def tts():
         return jsonify({"error": "Failed to synthesize speech"}), 500
 
 
-# ── /presets ──────────────────────────────────────────────────────────
 @app.route("/presets", methods=["GET", "POST"])
 @limiter.limit("60 per minute")
 def presets():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     if request.method == "GET":
-        with contextlib.suppress(Exception):
+        try:
             with open(PRESET_PATH) as f:
                 return jsonify(json.load(f))
-        return jsonify({"presets": []})
+        except Exception:
+            return jsonify({"presets": []})
     data = request.get_json(silent=True)
     if not data or not data.get("name"):
         return jsonify({"error": "Preset needs a name"}), 400
@@ -557,10 +313,7 @@ def presets():
         if PRESET_PATH.exists():
             with open(PRESET_PATH) as f:
                 presets_list = json.load(f).get("presets", [])
-        existing = next(
-            (i for i, p in enumerate(presets_list) if p.get("name") == data["name"]),
-            None,
-        )
+        existing = next((i for i, p in enumerate(presets_list) if p.get("name") == data["name"]), None)
         if existing is not None:
             presets_list[existing] = data
         else:
@@ -570,26 +323,27 @@ def presets():
     return jsonify({"ok": True})
 
 
-# ── /log ──────────────────────────────────────────────────────────────
 @app.route("/log", methods=["GET", "POST"])
 @limiter.limit("120 per minute")
 def log_endpoint():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     if request.method == "GET":
-        with contextlib.suppress(Exception):
+        try:
             with open(LOG_PATH) as f:
                 return jsonify(json.load(f))
-        return jsonify({"entries": []})
+        except Exception:
+            return jsonify({"entries": []})
     entry, error = _validate_log_entry(request.get_json(silent=True))
     if error:
         return jsonify({"error": error}), 400
     entries = []
-    with contextlib.suppress(Exception):
-        if LOG_PATH.exists():
+    if LOG_PATH.exists():
+        try:
             with open(LOG_PATH) as f:
                 entries = json.load(f).get("entries", [])
+        except Exception:
+            pass
     entries.insert(0, entry)
     if len(entries) > 500:
         entries = entries[:500]
@@ -601,9 +355,8 @@ def log_endpoint():
 @app.route("/log/clear", methods=["POST"])
 @limiter.limit("30 per minute")
 def clear_log_endpoint():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     with open(LOG_PATH, "w") as f:
         json.dump({"entries": []}, f, indent=2)
     return jsonify({"ok": True})
@@ -615,44 +368,13 @@ def _filter_shodan_response(payload):
     return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
 
 
-def _filter_lookup_result(result):
-    """Filter lookup results to remove sensitive information."""
-    if not isinstance(result, dict):
-        return {}
-
-    # Define fields that should not be exposed
-    sensitive_fields = {
-        "api_key",
-        "token",
-        "password",
-        "secret",
-        "private_key",
-        "credentials",
-        "auth",
-        "authorization",
-    }
-
-    # Recursively filter the result
-    def filter_dict(d):
-        if not isinstance(d, dict):
-            return d
-        return {
-            k: filter_dict(v) if isinstance(v, dict) else v
-            for k, v in d.items()
-            if not any(sensitive in k.lower() for sensitive in sensitive_fields)
-        }
-
-    return filter_dict(result)
-
-
-# ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
-@limiter.limit(rate_limit_config["shodan"])
+@limiter.limit("10 per minute")
 def shodan():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-    if not (ip := request.args.get("ip", "").strip()):
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    ip = request.args.get("ip", "").strip()
+    if not ip:
         return jsonify({"error": "ip param required"}), 400
     if not SHODAN_API_KEY:
         return jsonify({"error": "SHODAN_API_KEY not set on server"}), 503
@@ -669,29 +391,19 @@ def shodan():
         return jsonify({"error": str(e)}), 500
 
 
-# ── /analyze_pdf ──────────────────────────────────────────────────────
 @app.route("/analyze_pdf", methods=["POST"])
 @limiter.limit("10 per minute")
 def analyze_pdf():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
     f = request.files["file"]
     raw = f.read()
     result = {"metadata": {}, "links": [], "ips": [], "suspicious": False, "pages": 0}
-    ip_pattern = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+    ip_pattern  = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
     url_pattern = re.compile(r'https?://[^\s<>"]+|www\.[^\s<>"]+', re.I)
-    suspicious_keywords = [
-        "eval(",
-        "javascript:",
-        "/launch",
-        "/aa",
-        "/openaction",
-        "cmd.exe",
-        "powershell",
-    ]
+    suspicious_keywords = ["eval(", "javascript:", "/launch", "/aa", "/openaction", "cmd.exe", "powershell"]
 
     if pdfplumber:
         try:
@@ -703,17 +415,16 @@ def analyze_pdf():
                 for page in pdf.pages:
                     t = page.extract_text() or ""
                     full_text += t
-                    for href in page.hyperlinks or []:
-                        if uri := href.get("uri", ""):
+                    for href in (page.hyperlinks or []):
+                        uri = href.get("uri", "")
+                        if uri:
                             result["links"].append(uri)
-                result["ips"] = list(set(ip_pattern.findall(full_text)))
-                extra_links = url_pattern.findall(full_text)
+                result["ips"]   = list(set(ip_pattern.findall(full_text)))
+                extra_links     = url_pattern.findall(full_text)
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
-                result["suspicious"] = any(
-                    kw in raw_lower for kw in suspicious_keywords
-                )
-                return jsonify(_filter_lookup_result(result))
+                result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
+                return jsonify(_filter_pdf_result(result))
         except Exception:
             pass
 
@@ -722,37 +433,33 @@ def analyze_pdf():
             reader = PyPDF2.PdfReader(io.BytesIO(raw))
             result["pages"] = len(reader.pages)
             info = reader.metadata or {}
-            result["metadata"] = {
-                str(k).lstrip("/"): str(v) for k, v in info.items() if v
-            }
+            result["metadata"] = {str(k).lstrip("/"): str(v) for k, v in info.items() if v}
             full_text = ""
             for page in reader.pages:
-                full_text += page.extract_text() or ""
-            result["ips"] = list(set(ip_pattern.findall(full_text)))
-            result["links"] = list(set(url_pattern.findall(full_text)))
+                full_text += (page.extract_text() or "")
+            result["ips"]        = list(set(ip_pattern.findall(full_text)))
+            result["links"]      = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-            return jsonify(_filter_lookup_result(result))
+            return jsonify(_filter_pdf_result(result))
         except Exception:
-            logger.exception("PyPDF2 parsing failed in /analyze_pdf")
+            app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
             return jsonify({"error": "Failed to analyze PDF"}), 500
 
     raw_lower = raw.lower().decode("latin-1", errors="ignore")
-    raw_str = raw.decode("latin-1", errors="ignore")
-    result["ips"] = list(set(ip_pattern.findall(raw_str)))
-    result["links"] = list(set(url_pattern.findall(raw_str)))
+    raw_str   = raw.decode("latin-1", errors="ignore")
+    result["ips"]        = list(set(ip_pattern.findall(raw_str)))
+    result["links"]      = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-    result["metadata"] = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
-    return jsonify(_filter_lookup_result(result))
+    result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
+    return jsonify(_filter_pdf_result(result))
 
 
-# ── /train ────────────────────────────────────────────────────────────
 @app.route("/train", methods=["POST"])
-@limiter.limit(rate_limit_config["train"])
+@limiter.limit("5 per minute")
 def train():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     files = request.files.getlist("files")
     if not files:
         return jsonify({"error": "No audio files uploaded"}), 400
@@ -760,12 +467,9 @@ def train():
     validated = []
     for f in files:
         fname = f.filename or f"clip_{int(time.time())}.wav"
-        safe = re.sub(r"[^\w.\-]", "_", fname)
+        safe = re.sub(r'[^\w.\-]', '_', fname)
         safe = Path(safe).name
         if not safe or safe.startswith("."):
-            # Dot-prefixed filenames (e.g. .bashrc, .env, .clip.wav) are
-            # deliberately rejected to prevent hidden or config files from
-            # being persisted in SAMPLES_DIR.
             return jsonify({"error": "Invalid filename"}), 400
         if not _is_audio_upload(f):
             return jsonify({"error": f"Invalid audio file: {safe}"}), 400
@@ -775,30 +479,27 @@ def train():
         f.save(dest)
         saved.append(safe)
     manifest = {
-        "samples": saved,
+        "samples":    saved,
         "sample_dir": str(SAMPLES_DIR),
         "trained_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "count": len(saved),
+        "count":      len(saved),
     }
     with open(MODEL_DIR / "manifest.json", "w") as mf:
         json.dump(manifest, mf, indent=2)
     voice_id = None
     try:
         from voice_training import train_from_samples
-
         voice_id = train_from_samples([str(SAMPLES_DIR / s) for s in saved])
         manifest["status"] = "trained" if voice_id else "samples_saved"
         if voice_id:
             manifest["voice_id"] = voice_id
         else:
-            manifest["note"] = (
-                "Samples saved. Set GOOGLE_API_KEY and use ElevenLabs/Gemini to train a real voice model."
-            )
+            manifest["note"] = "Samples saved. Install Coqui TTS (pip install TTS) to train a real voice model."
     except ImportError:
         manifest["status"] = "samples_saved"
         manifest["note"] = "voice_training.py not found — samples saved only"
     except Exception:
-        logger.exception("Training failed")
+        app.logger.exception("Training failed")
         manifest["status"] = "training_failed"
         manifest["error"] = "Training failed. Check server logs."
     with open(MODEL_DIR / "manifest.json", "w") as mf:
@@ -806,225 +507,11 @@ def train():
     return jsonify({"ok": True, "saved": saved, **manifest})
 
 
-# ── /model_status ─────────────────────────────────────────────────────
 @app.route("/model_status")
 def model_status():
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     return jsonify(_model_status())
-
-
-# ── /cloned_status ───────────────────────────────────────────────────
-@app.route("/cloned_status")
-def cloned_status():
-    """Check if cloned voice is available and whether it uses fallback engine."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    try:
-        import importlib
-
-        cvc = importlib.import_module("custom_voice_config")
-        has_custom_voice = (
-            hasattr(cvc, "CUSTOM_VOICE_SAMPLES") and cvc.CUSTOM_VOICE_SAMPLES
-        )
-
-        result = {
-            "available": has_custom_voice,
-            "engine": "unknown",
-            "requires_coqui": False,
-            "coqui_installed": False,
-            "warning": None,
-        }
-
-        if has_custom_voice:
-            # Check if we have local_voice_* embeddings
-            import json
-
-            embeddings_root = Path("voice_embeddings").resolve()
-            if embeddings_root.exists():
-                embedding_files = list(embeddings_root.glob("local_voice_*.json"))
-                if embedding_files:
-                    # Check the first embedding for engine type
-                    data = json.loads(embedding_files[0].read_text())
-                    engine = data.get("engine", "fallback")
-                    result["engine"] = engine
-                    result["requires_coqui"] = engine == "coqui_xtts_v2"
-
-                    # Check if Coqui is installed
-                    with contextlib.suppress(Exception):
-                        import voice_training
-
-                        result["coqui_installed"] = (
-                            voice_training._get_coqui_model() is not None
-                        )
-                    if "coqui_installed" not in result:
-                        result["coqui_installed"] = False
-
-                    # Generate warning if needed
-                    if result["requires_coqui"] and not result["coqui_installed"]:
-                        result["warning"] = (
-                            "Voice cloning requires Coqui TTS (pip install TTS). Default voice will be used instead."
-                        )
-
-        return jsonify(result)
-
-    except ImportError:
-        return jsonify(
-            {"available": False, "warning": "Custom voice configuration not found"}
-        )
-    except Exception:
-        logger.exception("Error checking cloned status")
-        return jsonify(
-            {"available": False, "warning": "Failed to check voice status"}
-        ), 500
-
-
-# ── /backup ───────────────────────────────────────────────────────────
-@app.route("/backup", methods=["POST"])
-@limiter.limit(rate_limit_config["backup"])
-def create_backup():
-    """Create a backup of voice data."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    if not _BACKUP_OK:
-        return jsonify({"error": "Backup manager not available"}), 503
-
-    try:
-        data = request.get_json(silent=True) or {}
-        name = data.get("name")
-        backup_path = _backup_manager.BackupManager().create_backup(name)
-        return jsonify({"backup_path": backup_path, "status": "created"})
-    except Exception:
-        logger.exception("Backup creation failed")
-        return jsonify({"error": "Backup creation failed"}), 500
-
-
-@app.route("/backup", methods=["GET"])
-def list_backups():
-    """List all available backups."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    if not _BACKUP_OK:
-        return jsonify({"error": "Backup manager not available"}), 503
-
-    try:
-        backups = _backup_manager.BackupManager().list_backups()
-        return jsonify({"backups": backups})
-    except Exception:
-        logger.exception("Backup listing failed")
-        return jsonify({"error": "Backup listing failed"}), 500
-
-
-@app.route("/backup/restore", methods=["POST"])
-def restore_backup():
-    """Restore from a backup."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    if not _BACKUP_OK:
-        return jsonify({"error": "Backup manager not available"}), 503
-
-    try:
-        data = request.get_json(silent=True) or {}
-        if not (backup_path := data.get("backup_path")):
-            return jsonify({"error": "backup_path is required"}), 400
-
-        results = _backup_manager.BackupManager().restore_backup(backup_path)
-        return jsonify(results)
-    except Exception:
-        logger.exception("Backup restoration failed")
-        return jsonify({"error": "Backup restoration failed"}), 500
-
-
-@app.route("/backup/<backup_name>", methods=["DELETE"])
-def delete_backup(backup_name):
-    """Delete a specific backup."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    if not _BACKUP_OK:
-        return jsonify({"error": "Backup manager not available"}), 503
-
-    try:
-        deleted = _backup_manager.BackupManager().delete_backup(backup_name)
-        if deleted:
-            return jsonify({"status": "deleted", "backup_name": backup_name})
-        else:
-            return jsonify({"error": "Backup not found"}), 404
-    except Exception:
-        logger.exception("Backup deletion failed")
-        return jsonify({"error": "Backup deletion failed"}), 500
-    """Check if cloned voice is available and whether it uses fallback engine."""
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
-    try:
-        import importlib
-
-        cvc = importlib.import_module("custom_voice_config")
-        has_custom_voice = (
-            hasattr(cvc, "CUSTOM_VOICE_SAMPLES") and cvc.CUSTOM_VOICE_SAMPLES
-        )
-
-        result = {
-            "available": has_custom_voice,
-            "engine": "unknown",
-            "requires_coqui": False,
-            "coqui_installed": False,
-            "warning": None,
-        }
-
-        if has_custom_voice:
-            # Check if we have local_voice_* embeddings
-            import json
-
-            embeddings_root = Path("voice_embeddings").resolve()
-            if embeddings_root.exists():
-                embedding_files = list(embeddings_root.glob("local_voice_*.json"))
-                if embedding_files:
-                    # Check the first embedding for engine type
-                    data = json.loads(embedding_files[0].read_text())
-                    engine = data.get("engine", "fallback")
-                    result["engine"] = engine
-                    result["requires_coqui"] = engine == "coqui_xtts_v2"
-
-                    # Check if Coqui is installed
-                    with contextlib.suppress(Exception):
-                        import voice_training
-
-                        result["coqui_installed"] = (
-                            voice_training._get_coqui_model() is not None
-                        )
-                    if "coqui_installed" not in result:
-                        result["coqui_installed"] = False
-
-                    # Generate warning if needed
-                    if result["requires_coqui"] and not result["coqui_installed"]:
-                        result["warning"] = (
-                            "Voice cloning requires Coqui TTS (pip install TTS). Default voice will be used instead."
-                        )
-
-        return jsonify(result)
-
-    except ImportError:
-        return jsonify(
-            {"available": False, "warning": "Custom voice configuration not found"}
-        )
-    except Exception:
-        logger.exception("Error checking cloned status")
-        return jsonify(
-            {"available": False, "warning": "Failed to check voice status"}
-        ), 500
 
 
 def _model_status():
@@ -1034,69 +521,70 @@ def _model_status():
             with open(manifest_path) as f:
                 m = json.load(f)
             return {
-                "trained": True,
-                "count": m.get("count", 0),
+                "trained":    True,
+                "count":      m.get("count", 0),
                 "trained_at": m.get("trained_at", "unknown"),
-                "status": m.get("status", "unknown"),
-                "voice_id": m.get("voice_id"),
-                "error": m.get("error"),
-                "note": m.get("note"),
+                "status":     m.get("status", "unknown"),
+                "voice_id":   m.get("voice_id"),
+                "error":      m.get("error"),
+                "note":       m.get("note"),
             }
         except Exception:
             pass
     return {"trained": False}
 
 
-# ── /api/lookup ───────────────────────────────────────────────────────
+def _resolve_voice_settings(call_type: str) -> dict:
+    try:
+        if "custom_voice_config" in sys.modules:
+            importlib.reload(sys.modules["custom_voice_config"])
+        custom = importlib.import_module("custom_voice_config")
+        engine = getattr(custom, "CUSTOM_VOICE_ENGINE", None)
+        if engine == "fallback":
+            return {"voice_id": _GEMINI_DEFAULT_VOICE}
+        fn = getattr(custom, "get_custom_voice_settings", None)
+        if callable(fn):
+            result = fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
+                return resolved
+    except Exception:
+        pass
+    try:
+        if callable(_default_voice_fn):
+            result = _default_voice_fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
+                return resolved
+    except Exception:
+        pass
+    return {"voice_id": _GEMINI_DEFAULT_VOICE}
+
+
 @app.route("/api/lookup", methods=["POST"])
-@limiter.limit(rate_limit_config["lookup"])
+@limiter.limit("20 per minute")
 def api_lookup():
-    """
-    Real-data intelligence lookup for domains, IPs, and phone numbers.
-
-    Request body (JSON):
-        { "query": "<domain | IPv4 | phone number>" }
-
-    Response (JSON):
-        {
-          "query":     "<original input>",
-          "type":      "domain" | "ip" | "phone" | "unknown",
-          "timestamp": "<ISO-8601 UTC>",
-          ...type-specific fields
-        }
-
-    Auth:       X-Voice-Token header (when VOICE_SERVER_TOKEN is set)
-    Rate-limit: 20 requests / minute per IP
-    """
-    auth_error = _require_auth()
-    if auth_error:
-        return auth_error
-
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
     if not _LOOKUP_OK:
-        return jsonify(
-            {
-                "error": "lookup_engine not available — ensure lookup_engine.py is present"
-            }
-        ), 503
-
+        return jsonify({"error": "lookup_engine not available"}), 503
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
-
-    if not (query := (data.get("query") or "").strip()):
+    query = (data.get("query") or "").strip()
+    if not query:
         return jsonify({"error": "query is required"}), 400
     if len(query) > 253:
         return jsonify({"error": "query too long"}), 400
-
-    # Block private/loopback ranges to prevent SSRF-style abuse
     _private = re.compile(
-        r"^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)"
+        r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)'
     )
     if _private.match(query):
-        return jsonify(
-            {"error": "Private or loopback addresses are not supported"}
-        ), 400
-
+        return jsonify({"error": "Private or loopback addresses are not supported"}), 400
     try:
         result = _lookup_engine.lookup(query)
         return jsonify(_filter_lookup_result(result))
@@ -1105,27 +593,22 @@ def api_lookup():
         return jsonify({"error": "Lookup failed"}), 500
 
 
-# ── run ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    _loopback = {"127.0.0.1", "::1", "localhost"}
+    _loopback      = {"127.0.0.1", "::1", "localhost"}
     _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
     _requested_host = os.environ.get("HOST", "127.0.0.1").strip()
-
     if _requested_host not in _loopback and not _allow_network:
         print(
-            f"ERROR: HOST={_requested_host!r} is not a loopback address.  "
+            f"ERROR: HOST={_requested_host!r} is not a loopback address. "
             "Set ALLOW_NETWORK_BINDING=1 if you understand the risk.",
             file=sys.stderr,
         )
         sys.exit(1)
-
     if _allow_network and _requested_host not in _loopback:
         print(
-            f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}, "
-            "server is reachable from the network.",
+            f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}.",
             file=sys.stderr,
         )
-
     host = _requested_host if _allow_network else "127.0.0.1"
     port = int(os.environ.get("PORT", 5001))
     app.run(host=host, port=port, debug=False)
