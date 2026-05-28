@@ -13,6 +13,7 @@ Env vars:
   HOST                  - bind address, only honoured when ALLOW_NETWORK_BINDING=1
 """
 
+# v2 - security hardened
 import os, io, re, json, time, uuid, importlib, sys, threading
 from pathlib import Path
 from dotenv import load_dotenv
