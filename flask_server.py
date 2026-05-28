@@ -499,8 +499,7 @@ def tts():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
-    text = (data.get("text") or "").strip()
-    if not text:
+    if not (text := (data.get("text") or "").strip()):
         return jsonify({"error": "text is required"}), 400
     if len(text) > MAX_TEXT_LENGTH:
         return jsonify(
@@ -653,8 +652,7 @@ def shodan():
     auth_error = _require_auth()
     if auth_error:
         return auth_error
-    ip = request.args.get("ip", "").strip()
-    if not ip:
+    if not (ip := request.args.get("ip", "").strip()):
         return jsonify({"error": "ip param required"}), 400
     if not SHODAN_API_KEY:
         return jsonify({"error": "SHODAN_API_KEY not set on server"}), 503
@@ -706,8 +704,7 @@ def analyze_pdf():
                     t = page.extract_text() or ""
                     full_text += t
                     for href in page.hyperlinks or []:
-                        uri = href.get("uri", "")
-                        if uri:
+                        if uri := href.get("uri", ""):
                             result["links"].append(uri)
                 result["ips"] = list(set(ip_pattern.findall(full_text)))
                 extra_links = url_pattern.findall(full_text)
@@ -845,7 +842,6 @@ def cloned_status():
         if has_custom_voice:
             # Check if we have local_voice_* embeddings
             import json
-            from pathlib import Path
 
             embeddings_root = Path("voice_embeddings").resolve()
             if embeddings_root.exists():
@@ -937,8 +933,7 @@ def restore_backup():
 
     try:
         data = request.get_json(silent=True) or {}
-        backup_path = data.get("backup_path")
-        if not backup_path:
+        if not (backup_path := data.get("backup_path")):
             return jsonify({"error": "backup_path is required"}), 400
 
         results = _backup_manager.BackupManager().restore_backup(backup_path)
@@ -991,7 +986,6 @@ def delete_backup(backup_name):
         if has_custom_voice:
             # Check if we have local_voice_* embeddings
             import json
-            from pathlib import Path
 
             embeddings_root = Path("voice_embeddings").resolve()
             if embeddings_root.exists():
@@ -1088,8 +1082,7 @@ def api_lookup():
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
 
-    query = (data.get("query") or "").strip()
-    if not query:
+    if not (query := (data.get("query") or "").strip()):
         return jsonify({"error": "query is required"}), 400
     if len(query) > 253:
         return jsonify({"error": "query too long"}), 400
