@@ -12,6 +12,7 @@ Env vars:
 """
 
 # trigger pr-screenshots workflow
+# v2
 import functools
 import hmac
 import io
