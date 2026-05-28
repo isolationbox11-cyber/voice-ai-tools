@@ -24,7 +24,7 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 2000
-_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+_TTS_MODEL = os.environ.get("GOOGLE_TTS_MODEL", "gemini-2.5-flash-preview-tts")
 _genai_client = None
 _client_lock = threading.Lock()
 
