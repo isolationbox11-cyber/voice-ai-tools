@@ -25,6 +25,7 @@ import threading
 import logging
 import hmac
 import hashlib
+import contextlib
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -204,6 +205,11 @@ def _validate_request_signature() -> tuple[bool, str]:
     Returns:
       (is_valid, error_message)
     """
+    # Ensure nonce cache is initialized (safety check for linter)
+    global _signature_nonce_cache
+    if "_signature_nonce_cache" not in globals():
+        _signature_nonce_cache = {}
+
     if not ENABLE_REQUEST_SIGNING or not VOICE_SERVER_TOKEN:
         return True, ""  # Signing disabled, skip validation
 
@@ -253,8 +259,8 @@ def _validate_request_signature() -> tuple[bool, str]:
 
     except (ValueError, TypeError):
         return False, "Invalid timestamp format"
-    except Exception as e:
-        logger.error(f"Signature validation error: {e}")
+    except Exception:
+        logger.error("Signature validation error")
         return False, "Signature validation failed"
 
 
@@ -852,13 +858,13 @@ def cloned_status():
                     result["requires_coqui"] = engine == "coqui_xtts_v2"
 
                     # Check if Coqui is installed
-                    try:
+                    with contextlib.suppress(Exception):
                         import voice_training
 
                         result["coqui_installed"] = (
                             voice_training._get_coqui_model() is not None
                         )
-                    except Exception:
+                    if "coqui_installed" not in result:
                         result["coqui_installed"] = False
 
                     # Generate warning if needed
@@ -873,7 +879,7 @@ def cloned_status():
         return jsonify(
             {"available": False, "warning": "Custom voice configuration not found"}
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking cloned status")
         return jsonify(
             {"available": False, "warning": "Failed to check voice status"}
@@ -896,7 +902,7 @@ def create_backup():
         name = data.get("name")
         backup_path = _backup_manager.BackupManager().create_backup(name)
         return jsonify({"backup_path": backup_path, "status": "created"})
-    except Exception as e:
+    except Exception:
         logger.exception("Backup creation failed")
         return jsonify({"error": "Backup creation failed"}), 500
 
@@ -914,7 +920,7 @@ def list_backups():
     try:
         backups = _backup_manager.BackupManager().list_backups()
         return jsonify({"backups": backups})
-    except Exception as e:
+    except Exception:
         logger.exception("Backup listing failed")
         return jsonify({"error": "Backup listing failed"}), 500
 
@@ -937,7 +943,7 @@ def restore_backup():
 
         results = _backup_manager.BackupManager().restore_backup(backup_path)
         return jsonify(results)
-    except Exception as e:
+    except Exception:
         logger.exception("Backup restoration failed")
         return jsonify({"error": "Backup restoration failed"}), 500
 
@@ -958,7 +964,7 @@ def delete_backup(backup_name):
             return jsonify({"status": "deleted", "backup_name": backup_name})
         else:
             return jsonify({"error": "Backup not found"}), 404
-    except Exception as e:
+    except Exception:
         logger.exception("Backup deletion failed")
         return jsonify({"error": "Backup deletion failed"}), 500
     """Check if cloned voice is available and whether it uses fallback engine."""
@@ -998,13 +1004,13 @@ def delete_backup(backup_name):
                     result["requires_coqui"] = engine == "coqui_xtts_v2"
 
                     # Check if Coqui is installed
-                    try:
+                    with contextlib.suppress(Exception):
                         import voice_training
 
                         result["coqui_installed"] = (
                             voice_training._get_coqui_model() is not None
                         )
-                    except Exception:
+                    if "coqui_installed" not in result:
                         result["coqui_installed"] = False
 
                     # Generate warning if needed
@@ -1019,7 +1025,7 @@ def delete_backup(backup_name):
         return jsonify(
             {"available": False, "warning": "Custom voice configuration not found"}
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Error checking cloned status")
         return jsonify(
             {"available": False, "warning": "Failed to check voice status"}
