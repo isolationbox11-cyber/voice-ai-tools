@@ -151,7 +151,20 @@ ALLOWED_ORIGINS = [
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 CORS(app, origins=ALLOWED_ORIGINS, allow_headers=["Content-Type", "X-Voice-Token"])
-limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"])
+
+# Per-endpoint rate limiting configuration
+rate_limit_config = {
+    "default": "200 per minute",
+    "tts": "30 per minute",
+    "train": "5 per minute",
+    "shodan": "10 per minute",
+    "lookup": "20 per minute",
+    "backup": "10 per minute",
+}
+
+limiter = Limiter(
+    get_remote_address, app=app, default_limits=[rate_limit_config["default"]]
+)
 
 
 def _safe_public_error_message(raw_error) -> str:
@@ -491,7 +504,7 @@ def health():
 
 # ── /tts ──────────────────────────────────────────────────────────────
 @app.route("/tts", methods=["POST"])
-@limiter.limit("30 per minute")
+@limiter.limit(rate_limit_config["tts"])
 def tts():
     auth_error = _require_auth()
     if auth_error:
@@ -647,7 +660,7 @@ def _filter_lookup_result(result):
 
 # ── /shodan ───────────────────────────────────────────────────────────
 @app.route("/shodan")
-@limiter.limit("10 per minute")
+@limiter.limit(rate_limit_config["shodan"])
 def shodan():
     auth_error = _require_auth()
     if auth_error:
@@ -748,7 +761,7 @@ def analyze_pdf():
 
 # ── /train ────────────────────────────────────────────────────────────
 @app.route("/train", methods=["POST"])
-@limiter.limit("5 per minute")
+@limiter.limit(rate_limit_config["train"])
 def train():
     auth_error = _require_auth()
     if auth_error:
@@ -884,6 +897,7 @@ def cloned_status():
 
 # ── /backup ───────────────────────────────────────────────────────────
 @app.route("/backup", methods=["POST"])
+@limiter.limit(rate_limit_config["backup"])
 def create_backup():
     """Create a backup of voice data."""
     auth_error = _require_auth()
@@ -1048,7 +1062,7 @@ def _model_status():
 
 # ── /api/lookup ───────────────────────────────────────────────────────
 @app.route("/api/lookup", methods=["POST"])
-@limiter.limit("20 per minute")
+@limiter.limit(rate_limit_config["lookup"])
 def api_lookup():
     """
     Real-data intelligence lookup for domains, IPs, and phone numbers.
