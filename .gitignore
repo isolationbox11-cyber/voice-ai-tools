@@ -21,6 +21,11 @@ env/
 .env
 .env.*
 
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
 # Logs
 *.log
 session_log.json
@@ -32,6 +37,10 @@ session_log.json
 
 # Voice presets (user-specific)
 voice_presets.json
+
+# Test files
+test_audio.*
+test_output.*
 
 # OS
 .DS_Store
