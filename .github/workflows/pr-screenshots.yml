@@ -8,6 +8,9 @@ permissions:
   contents: read
   pull-requests: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   screenshot:
     runs-on: ubuntu-latest
@@ -118,16 +121,14 @@ jobs:
           from PIL import Image
           import os, pathlib
 
-          MAX_B64_BYTES = 18000  # ~18KB each => 3 shots = 54KB, well under 65536 limit
+          MAX_B64_BYTES = 18000
           shots_dir = pathlib.Path('screenshots')
 
           for png in sorted(shots_dir.glob('*.png')):
               img = Image.open(png).convert('RGB')
-              # Resize to max 700px wide, keep aspect ratio
               w, h = img.size
               if w > 700:
                   img = img.resize((700, int(h * 700 / w)), Image.LANCZOS)
-              # Save as JPEG with quality stepping down until small enough
               out = png.with_suffix('.jpg')
               quality = 72
               while quality >= 20:
@@ -137,7 +138,7 @@ jobs:
                   if b64_size <= MAX_B64_BYTES:
                       break
                   quality -= 8
-              png.unlink()  # remove original PNG
+              png.unlink()
               print(f'{png.name} -> {out.name} ({b64_size} b64 bytes, quality={quality})')
           EOF
 
@@ -186,7 +187,6 @@ jobs:
               }
             }
 
-            // Delete previous auto-preview comment to avoid spam
             const comments = await github.rest.issues.listComments({ owner, repo, issue_number: prNumber });
             for (const c of comments.data) {
               if (c.body.startsWith('## 📸 PR Visual Preview')) {
