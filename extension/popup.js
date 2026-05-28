@@ -1,4 +1,4 @@
-/* popup.js - Voice AI Tools v3.0 - karaoke train UI, no emoji */
+/* popup.js - Voice AI Tools v3.1 */
 
 const DEFAULT_SERVER = 'http://127.0.0.1:5001';
 let serverUrl = DEFAULT_SERVER, token = '', logs = [];
@@ -7,14 +7,11 @@ let trainClips = [null, null, null, null];
 let currentTake = 0;
 let timerInterval = null;
 let useClonedVoice = true;
+let clonedVoiceAvailable = false;  // set after /cloned_status check
 
-// -- karaoke presets
 const PRESETS = [
   {
-    id: 'calm',
-    label: 'Calm Reading',
-    sub: 'relaxed tone',
-    moodClass: 'calm',
+    id: 'calm', label: 'Calm Reading', sub: 'relaxed tone', moodClass: 'calm',
     hint: 'Read this in a relaxed, even tone -- like explaining something to a friend.',
     lines: [
       'Today is quiet, and I am taking my time with my words.',
@@ -24,10 +21,7 @@ const PRESETS = [
     ]
   },
   {
-    id: 'rant',
-    label: 'Mild Rant',
-    sub: 'animated tone',
-    moodClass: 'rant',
+    id: 'rant', label: 'Mild Rant', sub: 'animated tone', moodClass: 'rant',
     hint: 'Read this like you are venting to someone who already agrees with you -- not yelling, just animated.',
     lines: [
       'I cannot believe how much nonsense I deal with just to get basic things done.',
@@ -37,10 +31,7 @@ const PRESETS = [
     ]
   },
   {
-    id: 'curious',
-    label: 'Curious Questions',
-    sub: 'skeptical tone',
-    moodClass: 'curious',
+    id: 'curious', label: 'Curious Questions', sub: 'skeptical tone', moodClass: 'curious',
     hint: 'Read this like you are honestly wondering the answer, with a little skepticism mixed in.',
     lines: [
       'Why does it always feel like the simple questions are the hardest to answer?',
@@ -50,10 +41,7 @@ const PRESETS = [
     ]
   },
   {
-    id: 'singing',
-    label: 'Short Song Line',
-    sub: 'sung freely',
-    moodClass: 'singing',
+    id: 'singing', label: 'Short Song Line', sub: 'sung freely', moodClass: 'singing',
     hint: 'Sing this -- whatever melody comes to you. Do not overthink it.',
     lines: [
       'I keep singing to this little machine,',
@@ -62,7 +50,6 @@ const PRESETS = [
   }
 ];
 
-// -- storage wrapper
 const store = {
   get(keys, cb) {
     try {
@@ -86,7 +73,6 @@ const store = {
   }
 };
 
-// -- boot
 document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   initTabs();
@@ -94,8 +80,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   initTrain();
   initTrack();
   initLog();
+  initSettings();
   animateBars();
-  checkConnection();
+  await checkConnection();
+  await checkClonedStatus();
 });
 
 async function loadSettings() {
@@ -104,6 +92,35 @@ async function loadSettings() {
     token = res.token || '';
     r();
   }));
+}
+
+// -- check whether a trained cloned voice exists on the server
+async function checkClonedStatus() {
+  try {
+    const r = await fetch(serverUrl + '/cloned_status', { headers: { 'X-Voice-Token': token } });
+    const d = await r.json();
+    clonedVoiceAvailable = !!d.available;
+  } catch (e) {
+    clonedVoiceAvailable = false;
+  }
+  updateClonedModeButton();
+}
+
+function updateClonedModeButton() {
+  const clonedBtn = document.getElementById('btn-mode-cloned');
+  const statusEl  = document.getElementById('voice-status');
+  if (!clonedBtn) return;
+  if (clonedVoiceAvailable) {
+    clonedBtn.textContent = 'My Voice';
+    clonedBtn.style.opacity = '1';
+    clonedBtn.title = 'Use your trained cloned voice';
+    if (useClonedVoice && statusEl) statusEl.textContent = 'Your cloned voice is ready';
+  } else {
+    clonedBtn.textContent = 'My Voice (not trained)';
+    clonedBtn.style.opacity = '0.45';
+    clonedBtn.title = 'No trained voice found. Go to Train tab first.';
+    if (useClonedVoice && statusEl) statusEl.textContent = 'No cloned voice yet — go to Train tab first';
+  }
 }
 
 // -- tabs
@@ -120,14 +137,18 @@ function initTabs() {
 
 // -- voice tab
 function initVoice() {
-  const speakBtn = document.getElementById('btn-speak');
-  const clearBtn = document.getElementById('btn-clear-voice');
+  const speakBtn  = document.getElementById('btn-speak');
+  const clearBtn  = document.getElementById('btn-clear-voice');
   const compareBtn = document.getElementById('btn-compare');
   const clonedBtn = document.getElementById('btn-mode-cloned');
-  const stockBtn = document.getElementById('btn-mode-stock');
-  const statusEl = document.getElementById('voice-status');
+  const stockBtn  = document.getElementById('btn-mode-stock');
+  const statusEl  = document.getElementById('voice-status');
 
   if (clonedBtn) clonedBtn.addEventListener('click', () => {
+    if (!clonedVoiceAvailable) {
+      if (statusEl) statusEl.textContent = 'No trained voice yet. Go to Train tab first.';
+      return;
+    }
     useClonedVoice = true;
     clonedBtn.classList.add('active');
     if (stockBtn) stockBtn.classList.remove('active');
@@ -138,7 +159,7 @@ function initVoice() {
     useClonedVoice = false;
     stockBtn.classList.add('active');
     if (clonedBtn) clonedBtn.classList.remove('active');
-    if (statusEl) statusEl.textContent = 'Using stock voice';
+    if (statusEl) statusEl.textContent = 'Using stock voice (Kore)';
   });
 
   if (clearBtn) clearBtn.addEventListener('click', () => {
@@ -146,45 +167,45 @@ function initVoice() {
     if (txt) txt.value = '';
   });
 
-  if (speakBtn) speakBtn.addEventListener('click', () => speakText(useClonedVoice, false));
+  if (speakBtn) speakBtn.addEventListener('click', () => {
+    if (useClonedVoice && !clonedVoiceAvailable) {
+      const statusEl = document.getElementById('voice-status');
+      if (statusEl) statusEl.textContent = 'No trained voice yet. Go to Train tab first.';
+      return;
+    }
+    speakText(useClonedVoice, false);
+  });
 
+  // AB Compare: play stock first, wait for AUDIO_PLAYBACK_COMPLETE, then play cloned
   if (compareBtn) compareBtn.addEventListener('click', async () => {
+    if (!clonedVoiceAvailable) {
+      if (statusEl) statusEl.textContent = 'No cloned voice to compare. Train first.';
+      return;
+    }
     const txt = document.getElementById('tts-text');
     const text = txt ? txt.value.trim() : '';
     if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
+    compareBtn.disabled = true;
     if (statusEl) statusEl.textContent = 'AB: playing stock...';
-    await speakText(false, true);
-    setTimeout(async () => {
-      if (statusEl) statusEl.textContent = 'AB: playing cloned...';
-      await speakText(true, true);
-      if (statusEl) statusEl.textContent = 'AB compare done.';
-    }, 2500);
+    await speakTextAndWait(false);
+    if (statusEl) statusEl.textContent = 'AB: playing cloned...';
+    await speakTextAndWait(true);
+    if (statusEl) statusEl.textContent = 'AB compare done.';
+    compareBtn.disabled = false;
   });
 }
 
-/**
- * Route TTS through background.js -> offscreen.js so playback
- * survives popup closure.
- *
- * UI state ownership:
- *   'Sending...'  — set here while the fetch is in-flight
- *   ''            — cleared here on fetch ACK (ok:true); offscreen events take over
- *   'Error: ...'  — set here on fetch failure (ok:false or lastError)
- *   'Playing...'  — set by AUDIO_PLAYBACK_COMPLETE listener below (audio started)
- *   'Done'        — set by AUDIO_PLAYBACK_COMPLETE listener below
- *   'Playback error: ...' — set by AUDIO_PLAYBACK_ERROR listener below
- */
+// speakText: fire-and-forget (non-blocking, updates UI from response)
 async function speakText(cloned, silent) {
-  const txt = document.getElementById('tts-text');
+  const txt      = document.getElementById('tts-text');
   const statusEl = document.getElementById('voice-status');
   const speakBtn = document.getElementById('btn-speak');
   const text = txt ? txt.value.trim() : '';
   if (!text) { if (statusEl) statusEl.textContent = 'Enter text first.'; return; }
   if (!silent && speakBtn) speakBtn.disabled = true;
-  // 'Sending...' while the network request is in-flight.
-  // Never 'Playing...' here — that comes from AUDIO_PLAYBACK_COMPLETE.
   if (statusEl && !silent) statusEl.textContent = 'Sending...';
   const speed = document.getElementById('voice-speed');
+  const lang  = document.getElementById('voice-lang');
 
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({
@@ -192,33 +213,49 @@ async function speakText(cloned, silent) {
       text,
       token,
       serverUrl,
-      callType: cloned ? 'cloned' : 'stock',
-      voiceId: cloned ? 'cloned' : 'Kore',
-      speed: speed ? speed.value : 'normal',
+      callType: cloned ? 'cloned' : 'LEGITIMATE',
+      voiceId:  cloned ? 'cloned' : 'Kore',
+      speed:    speed ? speed.value : 'normal',
+      lang:     lang  ? lang.value  : 'en-US',
     }, (response) => {
       const err = chrome.runtime.lastError;
       if (err) {
-        // Extension messaging error (e.g. service worker not running)
         if (statusEl && !silent) statusEl.textContent = 'Extension error: ' + err.message;
         addLog('warn', 'TTS extension error: ' + err.message);
       } else if (response && !response.ok) {
-        // Fetch or HTTP error from background.js — playback will never start
         if (statusEl && !silent) statusEl.textContent = 'Error: ' + (response.error || 'unknown');
         addLog('warn', 'TTS error: ' + (response.error || 'unknown'));
       } else {
-        // Fetch succeeded; audio bytes are on their way to offscreen.
-        // Clear the in-flight status — AUDIO_PLAYBACK_COMPLETE will set 'Playing...'
-        if (statusEl && !silent) statusEl.textContent = '';
+        if (statusEl && !silent) statusEl.textContent = 'Playing...';
         addLog('voice', (cloned ? '[cloned] ' : '[stock] ') + text.substring(0, 40));
       }
       if (!silent && speakBtn) speakBtn.disabled = false;
-      resolve();
+      resolve(response);
     });
   });
 }
 
-// Offscreen events own the final playback UI state.
-// These fire whether or not the popup is the one that initiated the request.
+// speakTextAndWait: resolves only after AUDIO_PLAYBACK_COMPLETE or AUDIO_PLAYBACK_ERROR
+function speakTextAndWait(cloned) {
+  return new Promise((resolve) => {
+    function onMsg(message) {
+      if (message.type === 'AUDIO_PLAYBACK_COMPLETE' || message.type === 'AUDIO_PLAYBACK_ERROR') {
+        chrome.runtime.onMessage.removeListener(onMsg);
+        resolve();
+      }
+    }
+    chrome.runtime.onMessage.addListener(onMsg);
+    speakText(cloned, true).then(resp => {
+      // If fetch itself failed, no playback event will ever fire — resolve immediately
+      if (!resp || !resp.ok) {
+        chrome.runtime.onMessage.removeListener(onMsg);
+        resolve();
+      }
+    });
+  });
+}
+
+// Offscreen events -> update voice status
 chrome.runtime.onMessage.addListener((message) => {
   const statusEl = document.getElementById('voice-status');
   if (message.type === 'AUDIO_PLAYBACK_COMPLETE') {
@@ -232,12 +269,12 @@ chrome.runtime.onMessage.addListener((message) => {
 // -- train tab (karaoke)
 function initTrain() {
   const recordBtn = document.getElementById('record-btn');
-  const trainBtn = document.getElementById('btn-train');
-  const clearBtn = document.getElementById('btn-clear-clips');
-  const checkBtn = document.getElementById('btn-check-model');
-  const prevBtn = document.getElementById('btn-prev-take');
-  const nextBtn = document.getElementById('btn-next-take');
-  const redoBtn = document.getElementById('btn-redo-take');
+  const trainBtn  = document.getElementById('btn-train');
+  const clearBtn  = document.getElementById('btn-clear-clips');
+  const checkBtn  = document.getElementById('btn-check-model');
+  const prevBtn   = document.getElementById('btn-prev-take');
+  const nextBtn   = document.getElementById('btn-next-take');
+  const redoBtn   = document.getElementById('btn-redo-take');
 
   if (!recordBtn) return;
 
@@ -283,14 +320,15 @@ function initTrain() {
       if (d.trained) {
         if (status) status.textContent = 'Model: ' + (d.status || 'trained') + ' / ' + (d.count || '?') + ' clips / ' + (d.trained_at || '');
         if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
-        if (d.note && status) status.textContent += ' -- ' + d.note;
+        if (d.note  && status) status.textContent += ' -- ' + d.note;
         if (d.error && status) status.textContent += ' -- ' + d.error;
+        // refresh cloned status so voice tab reflects new model
+        await checkClonedStatus();
       } else {
         if (status) status.textContent = 'No model trained yet.';
         if (idEl) idEl.style.display = 'none';
       }
     } catch (e) {
-      const status = document.getElementById('train-status');
       if (status) status.textContent = 'Could not reach server on port 5001.';
     }
   });
@@ -298,17 +336,17 @@ function initTrain() {
 
 function renderKaraokeStep(step) {
   const p = PRESETS[step];
-  const moodEl = document.getElementById('karaoke-mood');
-  const labelEl = document.getElementById('karaoke-mood-label');
-  const subEl = document.getElementById('karaoke-take-sub');
-  const hintEl = document.getElementById('karaoke-hint');
-  const scriptEl = document.getElementById('karaoke-script');
+  const moodEl    = document.getElementById('karaoke-mood');
+  const labelEl   = document.getElementById('karaoke-mood-label');
+  const subEl     = document.getElementById('karaoke-take-sub');
+  const hintEl    = document.getElementById('karaoke-hint');
+  const scriptEl  = document.getElementById('karaoke-script');
   const recordLabel = document.getElementById('record-label');
 
-  if (moodEl) moodEl.className = 'karaoke-mood ' + p.moodClass;
+  if (moodEl)  moodEl.className = 'karaoke-mood ' + p.moodClass;
   if (labelEl) labelEl.textContent = p.label;
-  if (subEl) subEl.textContent = p.sub;
-  if (hintEl) hintEl.textContent = p.hint;
+  if (subEl)   subEl.textContent = p.sub;
+  if (hintEl)  hintEl.textContent = p.hint;
 
   if (scriptEl) {
     scriptEl.innerHTML = p.lines.map((line, i) =>
@@ -432,7 +470,7 @@ function updateTrainBtn() {
 }
 
 async function submitTraining() {
-  const status = document.getElementById('train-status');
+  const status   = document.getElementById('train-status');
   const trainBtn = document.getElementById('btn-train');
   const clips = trainClips.filter(Boolean);
   if (!clips.length) { if (status) status.textContent = 'No clips recorded yet.'; return; }
@@ -446,11 +484,13 @@ async function submitTraining() {
     const idEl = document.getElementById('trained-voice-id');
     if (d.ok) {
       if (status) status.textContent = d.status === 'trained'
-        ? 'Voice trained. ID: ' + (d.voice_id || 'saved')
+        ? 'Voice trained! Voice ID: ' + (d.voice_id || 'saved')
         : (d.note || d.status || 'Samples saved.');
       if (idEl && d.voice_id) { idEl.style.display = 'block'; idEl.textContent = 'Voice ID: ' + d.voice_id; }
       if (d.error && status) status.textContent += ' -- ' + d.error;
       addLog('train', 'Training result: ' + (d.status || 'ok') + ' / ' + (d.voice_id || ''));
+      // Refresh cloned status so voice tab knows a voice is now available
+      await checkClonedStatus();
     } else {
       if (status) status.textContent = 'Training failed: ' + (d.error || 'unknown error');
       addLog('warn', 'Training failed: ' + (d.error || 'unknown'));
@@ -462,41 +502,123 @@ async function submitTraining() {
   if (trainBtn) { trainBtn.disabled = false; updateTrainBtn(); }
 }
 
-// -- track tab
+// -- track tab  (uses /api/lookup for IP/domain/phone; /analyze_pdf for PDFs)
 function initTrack() {
-  const scanBtn = document.getElementById('btn-track');
-  const pdfDrop = document.getElementById('pdf-drop');
+  const scanBtn  = document.getElementById('btn-track');
+  const pdfDrop  = document.getElementById('pdf-drop');
   const pdfInput = document.getElementById('pdf-file');
-  const ipInput = document.getElementById('track-ip');
+  const ipInput  = document.getElementById('track-ip');
   const trackBox = document.getElementById('track-result');
-  const pdfBox = document.getElementById('pdf-result');
+  const pdfBox   = document.getElementById('pdf-result');
 
   if (scanBtn) scanBtn.addEventListener('click', async () => {
-    const ip = ipInput ? ipInput.value.trim() : '';
-    if (!ip) { if (trackBox) trackBox.textContent = 'Enter an IP or domain.'; return; }
+    const query = ipInput ? ipInput.value.trim() : '';
+    if (!query) { if (trackBox) trackBox.textContent = 'Enter an IP, domain, or phone number.'; return; }
     if (trackBox) trackBox.textContent = 'Scanning...';
     try {
-      const r = await fetch(serverUrl + '/shodan?ip=' + encodeURIComponent(ip), { headers: { 'X-Voice-Token': token } });
+      const r = await fetch(serverUrl + '/api/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Voice-Token': token },
+        body: JSON.stringify({ query })
+      });
       const d = await r.json();
-      if (d.error) { if (trackBox) trackBox.textContent = 'Error: ' + d.error; addLog('warn', 'Shodan: ' + d.error); return; }
-      const lines = ['IP: ' + d.ip_str, 'Org: ' + (d.org || 'N/A'), 'Country: ' + (d.country_name || 'N/A')];
-      if (d.ports && d.ports.length) lines.push('Ports: ' + d.ports.join(', '));
-      if (d.vulns && Object.keys(d.vulns).length) lines.push('Vulns: ' + Object.keys(d.vulns).join(', '));
-      if (trackBox) trackBox.textContent = lines.join('\n');
-      addLog('track', 'Scanned: ' + ip);
+      if (d.error) {
+        if (trackBox) trackBox.textContent = 'Error: ' + d.error;
+        addLog('warn', 'Lookup: ' + d.error);
+        return;
+      }
+      if (trackBox) trackBox.textContent = renderLookupResult(d);
+      addLog('track', 'Lookup: ' + query + ' [' + (d.type || '?') + ']');
     } catch (e) {
-      if (trackBox) trackBox.textContent = 'Scan failed. Is Flask running on port 5001?';
-      addLog('warn', 'Scan error: ' + e.message);
+      if (trackBox) trackBox.textContent = 'Lookup failed. Is Flask running on port 5001?';
+      addLog('warn', 'Lookup error: ' + e.message);
     }
+  });
+
+  // Allow pressing Enter in the input to trigger scan
+  if (ipInput) ipInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') scanBtn && scanBtn.click();
   });
 
   if (pdfDrop) {
     pdfDrop.addEventListener('click', () => { if (pdfInput) pdfInput.click(); });
     pdfDrop.addEventListener('dragover', e => { e.preventDefault(); pdfDrop.classList.add('dragover'); });
     pdfDrop.addEventListener('dragleave', () => pdfDrop.classList.remove('dragover'));
-    pdfDrop.addEventListener('drop', e => { e.preventDefault(); pdfDrop.classList.remove('dragover'); const f = e.dataTransfer.files[0]; if (f) analyzePDF(f, pdfBox); });
+    pdfDrop.addEventListener('drop', e => {
+      e.preventDefault(); pdfDrop.classList.remove('dragover');
+      const f = e.dataTransfer.files[0]; if (f) analyzePDF(f, pdfBox);
+    });
   }
-  if (pdfInput) pdfInput.addEventListener('change', () => { const f = pdfInput.files[0]; if (f) analyzePDF(f, pdfBox); });
+  if (pdfInput) pdfInput.addEventListener('change', () => {
+    const f = pdfInput.files[0]; if (f) analyzePDF(f, pdfBox);
+  });
+}
+
+// Render /api/lookup result for all three types: ip, domain, phone
+function renderLookupResult(d) {
+  const lines = [];
+  const type = d.type || 'unknown';
+  lines.push('Query : ' + (d.query || '?'));
+  lines.push('Type  : ' + type);
+  lines.push('Time  : ' + (d.timestamp || ''));
+  lines.push('');
+
+  if (type === 'ip') {
+    const geo = d.geo || {};
+    if (geo.error) {
+      lines.push('Geo   : ' + geo.error);
+    } else {
+      if (geo.country)    lines.push('Country  : ' + geo.country);
+      if (geo.regionName) lines.push('Region   : ' + geo.regionName);
+      if (geo.city)       lines.push('City     : ' + geo.city);
+      if (geo.isp)        lines.push('ISP      : ' + geo.isp);
+      if (geo.org)        lines.push('Org      : ' + geo.org);
+      if (geo.as)         lines.push('ASN      : ' + geo.as);
+      if (geo.reverse)    lines.push('Reverse  : ' + geo.reverse);
+    }
+    if (d.reverse_dns)  lines.push('rDNS     : ' + d.reverse_dns);
+  }
+
+  if (type === 'domain') {
+    const dns   = d.dns   || {};
+    const whois = d.whois || {};
+    if (dns.error) {
+      lines.push('DNS   : ' + dns.error);
+    } else {
+      if (dns.A   && dns.A.length)   lines.push('A      : ' + dns.A.join(', '));
+      if (dns.AAAA && dns.AAAA.length) lines.push('AAAA   : ' + dns.AAAA.join(', '));
+      if (dns.MX  && dns.MX.length)  lines.push('MX     : ' + dns.MX.map(m => m.host || m).join(', '));
+      if (dns.NS  && dns.NS.length)  lines.push('NS     : ' + dns.NS.join(', '));
+      if (dns.TXT && dns.TXT.length) lines.push('TXT    : ' + dns.TXT[0].substring(0, 80));
+    }
+    if (whois.error) {
+      lines.push('WHOIS  : ' + whois.error);
+    } else {
+      if (whois.registrar)       lines.push('Registrar: ' + whois.registrar);
+      if (whois.creation_date)   lines.push('Created  : ' + whois.creation_date);
+      if (whois.expiration_date) lines.push('Expires  : ' + whois.expiration_date);
+      if (whois.country)         lines.push('Country  : ' + whois.country);
+      if (whois.org)             lines.push('Org      : ' + whois.org);
+    }
+  }
+
+  if (type === 'phone') {
+    if (d.valid !== undefined) lines.push('Valid    : ' + (d.valid ? 'Yes' : 'No'));
+    if (d.international)       lines.push('E.164    : ' + d.international);
+    if (d.national)            lines.push('National : ' + d.national);
+    if (d.region)              lines.push('Region   : ' + d.region);
+    if (d.geo_description)     lines.push('Location : ' + d.geo_description);
+    if (d.carrier)             lines.push('Carrier  : ' + d.carrier);
+    if (d.number_type)         lines.push('Type     : ' + d.number_type);
+    if (d.timezones && d.timezones.length) lines.push('Timezone : ' + d.timezones[0]);
+    if (d.error)               lines.push('Error    : ' + d.error);
+  }
+
+  if (type === 'unknown') {
+    lines.push(d.error || 'Could not classify input.');
+  }
+
+  return lines.join('\n');
 }
 
 async function analyzePDF(f, box) {
@@ -510,7 +632,7 @@ async function analyzePDF(f, box) {
     const lines = ['PDF: ' + f.name, 'Pages: ' + (d.pages || '?')];
     if (d.metadata) Object.entries(d.metadata).forEach(([k, v]) => lines.push('  ' + k + ': ' + v));
     if (d.links && d.links.length) { lines.push('', 'Links (' + d.links.length + '):'); d.links.slice(0, 10).forEach(l => lines.push('  ' + l)); }
-    if (d.ips && d.ips.length) { lines.push('', 'Embedded IPs:'); d.ips.forEach(i => lines.push('  ' + i)); }
+    if (d.ips   && d.ips.length)   { lines.push('', 'Embedded IPs:'); d.ips.forEach(i => lines.push('  ' + i)); }
     if (d.suspicious) lines.push('', 'WARNING: SUSPICIOUS CONTENT DETECTED');
     if (box) box.textContent = lines.join('\n');
     addLog('ok', 'PDF done: ' + f.name);
@@ -546,19 +668,67 @@ function renderLog() {
   if (!list) return;
   if (!logs.length) { list.innerHTML = '<div class="log-empty">No activity logged yet.</div>'; return; }
   const c = { voice: '#4CC9F0', train: '#06D6A0', track: '#7B2FBE', pdf: '#F72585', ok: '#06D6A0', warn: '#F72585', info: '#4CC9F0' };
-  list.innerHTML = logs.map(l => '<div class="log-item"><span class="log-type" style="color:' + (c[l.type] || '#e0e0e0') + '">[' + l.type.toUpperCase() + ']</span> <span class="log-time">' + l.time + '</span> ' + esc(l.message) + '</div>').join('');
+  list.innerHTML = logs.map(l =>
+    '<div class="log-item"><span class="log-type" style="color:' + (c[l.type] || '#e0e0e0') + '">[' +
+    l.type.toUpperCase() + ']</span> <span class="log-time">' + l.time + '</span> ' + esc(l.message) + '</div>'
+  ).join('');
 }
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
-// -- connection check
+// -- settings tab
+function initSettings() {
+  const urlInput   = document.getElementById('settings-url');
+  const tokenInput = document.getElementById('settings-token');
+  const saveBtn    = document.getElementById('btn-save-settings');
+  const testBtn    = document.getElementById('btn-test-connection');
+  const statusEl   = document.getElementById('settings-status');
+
+  if (urlInput)   urlInput.value   = serverUrl;
+  if (tokenInput) tokenInput.value = token;
+
+  if (saveBtn) saveBtn.addEventListener('click', () => {
+    const newUrl   = (urlInput   ? urlInput.value.trim()   : '') || DEFAULT_SERVER;
+    const newToken = (tokenInput ? tokenInput.value.trim() : '');
+    serverUrl = newUrl;
+    token     = newToken;
+    store.set({ serverUrl, token });
+    if (statusEl) statusEl.textContent = 'Saved.';
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2000);
+    addLog('info', 'Settings saved: ' + newUrl);
+    checkConnection();
+    checkClonedStatus();
+  });
+
+  if (testBtn) testBtn.addEventListener('click', async () => {
+    if (statusEl) statusEl.textContent = 'Testing...';
+    try {
+      const r = await fetch(serverUrl + '/health', { headers: { 'X-Voice-Token': token } });
+      const d = await r.json();
+      if (statusEl) statusEl.textContent =
+        r.ok
+          ? 'Connected. TTS: ' + (d.tts_engine ? 'ready' : 'no engine') +
+            ' | Auth: ' + (d.auth_enabled ? 'on' : 'off') +
+            ' | Key: ' + (d.api_key_configured ? 'set' : 'MISSING')
+          : 'Server error: ' + r.status;
+    } catch (e) {
+      if (statusEl) statusEl.textContent = 'Cannot reach server: ' + e.message;
+    }
+  });
+}
+
+// -- connection indicator (header dot + footer text)
 async function checkConnection() {
-  const el = document.getElementById('conn-status');
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('conn-status');
   try {
     const r = await fetch(serverUrl + '/health', { headers: { 'X-Voice-Token': token } });
-    if (el) el.style.color = r.ok ? '#06D6A0' : '#F72585';
+    const ok = r.ok;
+    if (dot) dot.style.background = ok ? 'var(--ok)' : 'var(--warn)';
+    if (txt) txt.textContent = ok ? 'connected' : 'server error';
   } catch {
-    if (el) el.style.color = '#888';
+    if (dot) dot.style.background = '#888';
+    if (txt) txt.textContent = 'offline';
   }
 }
 

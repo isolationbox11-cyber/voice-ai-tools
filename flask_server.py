@@ -24,7 +24,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# ── optional heavy deps ───────────────────────────────────────────────
+# -- optional heavy deps
 try:
     import requests as _requests
 except ImportError:
@@ -65,13 +65,11 @@ except ImportError:
     _lookup_engine = None
     _LOOKUP_OK = False
 
-# ── config ────────────────────────────────────────────────────────────
+# -- config
 VOICE_SERVER_TOKEN = os.environ.get("VOICE_SERVER_TOKEN", "").strip()
 SHODAN_API_KEY     = os.environ.get("SHODAN_API_KEY", "")
 MAX_TEXT_LENGTH    = TTS_MAX_TEXT_LENGTH
 MAX_LOG_ENTRY_SIZE = 2048
-# 512 bytes is sufficient to read a complete ftyp box in MP4/M4A containers
-# and the fixed-size magic headers used by WAV, MP3, OGG, FLAC, and WebM.
 AUDIO_HEADER_READ_SIZE = 512
 PRESET_PATH        = Path("voice_presets.json")
 LOG_PATH           = Path("session_log.json")
@@ -96,7 +94,7 @@ if not VOICE_SERVER_TOKEN:
         file=sys.stderr,
     )
 
-# ── CORS ──────────────────────────────────────────────────────────────
+# -- CORS
 _extra_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
 ALLOWED_ORIGINS = [
     "http://127.0.0.1:5001",
@@ -110,27 +108,16 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["200 per minute"]
 
 
 def _safe_public_error_message(raw_error) -> str:
-    """Avoid returning stack traces or multi-line internals to clients."""
     msg = str(raw_error or "").strip().lower()
-    if any(
-        token in msg
-        for token in (
-            "api key missing", "missing api key", "api key not configured",
-            "apikey missing", "apikey not configured", "invalid api key",
-            "api key invalid", "unauthorized", "authentication failed",
-        )
-    ):
+    if any(t in msg for t in ("api key missing", "missing api key", "api key not configured",
+                               "apikey missing", "apikey not configured", "invalid api key",
+                               "api key invalid", "unauthorized", "authentication failed")):
         return "API key not configured"
-    if any(
-        token in msg
-        for token in (
-            "voice model unavailable", "voice model not found", "voice not found",
-            "model not found", "voice unavailable", "model unavailable",
-            "unsupported voice", "unsupported model", "invalid voice", "invalid model",
-        )
-    ):
+    if any(t in msg for t in ("voice model unavailable", "voice model not found", "voice not found",
+                               "model not found", "voice unavailable", "model unavailable",
+                               "unsupported voice", "unsupported model", "invalid voice", "invalid model")):
         return "Voice model unavailable"
-    if any(token in msg for token in ("timeout", "timed out", "deadline exceeded")):
+    if any(t in msg for t in ("timeout", "timed out", "deadline exceeded")):
         return "Request timed out"
     return "Speech synthesis failed"
 
@@ -157,11 +144,12 @@ def _validate_log_entry(data):
     return entry, None
 
 
-# ── auth ──────────────────────────────────────────────────────────────
+# -- auth
 def _check_token() -> bool:
     if not VOICE_SERVER_TOKEN:
         return True
     return request.headers.get("X-Voice-Token", "") == VOICE_SERVER_TOKEN
+
 
 def _is_audio_upload(file_storage) -> bool:
     stream = getattr(file_storage, "stream", None)
@@ -185,24 +173,23 @@ def _is_audio_upload(file_storage) -> bool:
             detected_mime = ""
     if detected_mime.startswith("audio/"):
         return True
-    # Container-based magic-byte checks for common training clip formats.
     if header.startswith(b"RIFF") and header[8:12] == b"WAVE":
-        return True  # WAV
+        return True
     if header.startswith(b"ID3"):
-        return True  # MP3 (ID3-tagged)
+        return True
     if len(header) > 1 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0:
-        return True  # MP3 (raw frame sync)
+        return True
     if header.startswith(b"OggS"):
-        return True  # OGG
+        return True
     if header.startswith(b"fLaC"):
-        return True  # FLAC
+        return True
     if header.startswith(b"\x1A\x45\xDF\xA3"):
-        return True  # WebM/Matroska (audio/webm)
+        return True
     if len(header) >= 16 and header[4:8] == b"ftyp":
         major_brand = header[8:12]
         compatible_brands = {header[i:i + 4] for i in range(16, len(header) - 3, 4)}
         if major_brand in {b"M4A ", b"M4B "}:
-            return True  # M4A/MP4 audio containers
+            return True
         if {b"M4A ", b"M4B "} & compatible_brands:
             return True
         if detected_mime.startswith("video/mp4"):
@@ -210,72 +197,30 @@ def _is_audio_upload(file_storage) -> bool:
     return False
 
 
-# ── result filtering ──────────────────────────────────────────────────
-# Allowlist of keys returned to clients from /analyze_pdf and /api/lookup.
-# This prevents accidental leakage of internal fields added by lookup_engine
-# or the PDF parsers (e.g. raw byte buffers, internal paths, error traces).
-_LOOKUP_ALLOWED_KEYS = {
-    # shared
-    "query", "type", "timestamp",
-    # domain
-    "domain", "registrar", "creation_date", "expiration_date",
-    "name_servers", "status", "dnssec", "a", "mx", "txt", "ns",
-    "whois",
-    # ip
-    "ip", "hostname", "city", "region", "country", "org", "asn",
-    "isp", "loc", "timezone", "postal",
-    # phone
-    "phone", "valid", "carrier", "line_type", "location",
-    "country_code", "national_number", "international",
-    # error / status
-    "error", "note",
-}
+# -- result filtering
+# Pass the full lookup result through — the lookup_engine returns nested dicts
+# (geo, dns, whois, etc.) which are all safe to return to the extension client.
+# We only strip keys that are clearly internal / dangerous.
+_LOOKUP_STRIP_KEYS = {"raw", "_internal", "stack", "traceback"}
 
-_PDF_ALLOWED_KEYS = {"metadata", "links", "ips", "suspicious", "pages", "error", "note"}
+
+def _sanitize_value(v):
+    """Recursively strip internal keys from nested dicts."""
+    if isinstance(v, dict):
+        return {k: _sanitize_value(vv) for k, vv in v.items() if k not in _LOOKUP_STRIP_KEYS}
+    if isinstance(v, list):
+        return [_sanitize_value(i) for i in v]
+    return v
 
 
 def _filter_lookup_result(result: dict) -> dict:
-    """Strip any keys not in the lookup allowlist before sending to the client."""
+    """Strip internal keys from lookup/PDF results before sending to the client."""
     if not isinstance(result, dict):
         return {}
-    return {k: v for k, v in result.items() if k in _LOOKUP_ALLOWED_KEYS}
+    return {k: _sanitize_value(v) for k, v in result.items() if k not in _LOOKUP_STRIP_KEYS}
 
 
-def _filter_pdf_result(result: dict) -> dict:
-    """Strip any keys not in the PDF allowlist before sending to the client."""
-    if not isinstance(result, dict):
-        return {}
-    return {k: v for k, v in result.items() if k in _PDF_ALLOWED_KEYS}
-
-
-# ── voice-settings resolution ─────────────────────────────────────────
-def _resolve_voice_settings(call_type: str) -> dict:
-    try:
-        custom = importlib.import_module("custom_voice_config")
-        fn = getattr(custom, "get_custom_voice_settings", None)
-        if callable(fn):
-            result = fn(call_type or "LEGITIMATE")
-            if isinstance(result, dict):
-                resolved = dict(result)
-                if not resolved.get("voice_id"):
-                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
-                return resolved
-    except Exception:
-        pass
-    try:
-        if callable(_default_voice_fn):
-            result = _default_voice_fn(call_type or "LEGITIMATE")
-            if isinstance(result, dict):
-                resolved = dict(result)
-                if not resolved.get("voice_id"):
-                    resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
-                return resolved
-    except Exception:
-        pass
-    return {"voice_id": _GEMINI_DEFAULT_VOICE}
-
-
-# ── /health ───────────────────────────────────────────────────────────
+# -- /health
 @app.route("/health")
 def health():
     return jsonify({
@@ -287,7 +232,24 @@ def health():
     })
 
 
-# ── /tts ──────────────────────────────────────────────────────────────
+# -- /cloned_status  (new)
+# Returns whether a trained custom voice is available right now.
+@app.route("/cloned_status")
+def cloned_status():
+    if not _check_token():
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        custom = importlib.import_module("custom_voice_config")
+        voice_id = getattr(custom, "CUSTOM_VOICE_ID", None)
+        engine   = getattr(custom, "CUSTOM_VOICE_ENGINE", None)
+        if voice_id:
+            return jsonify({"available": True, "voice_id": voice_id, "engine": engine})
+    except ImportError:
+        pass
+    return jsonify({"available": False})
+
+
+# -- /tts
 @app.route("/tts", methods=["POST"])
 @limiter.limit("30 per minute")
 def tts():
@@ -327,7 +289,7 @@ def tts():
         return jsonify({"error": "Failed to synthesize speech"}), 500
 
 
-# ── /presets ──────────────────────────────────────────────────────────
+# -- /presets
 @app.route("/presets", methods=["GET", "POST"])
 @limiter.limit("60 per minute")
 def presets():
@@ -357,7 +319,7 @@ def presets():
     return jsonify({"ok": True})
 
 
-# ── /log ──────────────────────────────────────────────────────────────
+# -- /log
 @app.route("/log", methods=["GET", "POST"])
 @limiter.limit("120 per minute")
 def log_endpoint():
@@ -403,7 +365,7 @@ def _filter_shodan_response(payload):
     return {k: payload[k] for k in SHODAN_SAFE_FIELDS if k in payload}
 
 
-# ── /shodan ───────────────────────────────────────────────────────────
+# -- /shodan
 @app.route("/shodan")
 @limiter.limit("10 per minute")
 def shodan():
@@ -427,7 +389,7 @@ def shodan():
         return jsonify({"error": str(e)}), 500
 
 
-# ── /analyze_pdf ──────────────────────────────────────────────────────
+# -- /analyze_pdf
 @app.route("/analyze_pdf", methods=["POST"])
 @limiter.limit("10 per minute")
 def analyze_pdf():
@@ -461,7 +423,7 @@ def analyze_pdf():
                 result["links"] = list(set(result["links"] + extra_links))
                 raw_lower = raw.lower().decode("latin-1", errors="ignore")
                 result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-                return jsonify(_filter_pdf_result(result))
+                return jsonify(_filter_lookup_result(result))
         except Exception:
             pass
 
@@ -478,7 +440,7 @@ def analyze_pdf():
             result["links"]      = list(set(url_pattern.findall(full_text)))
             raw_lower = raw.lower().decode("latin-1", errors="ignore")
             result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
-            return jsonify(_filter_pdf_result(result))
+            return jsonify(_filter_lookup_result(result))
         except Exception:
             app.logger.exception("PyPDF2 parsing failed in /analyze_pdf")
             return jsonify({"error": "Failed to analyze PDF"}), 500
@@ -489,10 +451,10 @@ def analyze_pdf():
     result["links"]      = list(set(url_pattern.findall(raw_str)))
     result["suspicious"] = any(kw in raw_lower for kw in suspicious_keywords)
     result["metadata"]   = {"note": "Install pdfplumber or PyPDF2 for full extraction"}
-    return jsonify(_filter_pdf_result(result))
+    return jsonify(_filter_lookup_result(result))
 
 
-# ── /train ────────────────────────────────────────────────────────────
+# -- /train
 @app.route("/train", methods=["POST"])
 @limiter.limit("5 per minute")
 def train():
@@ -545,7 +507,7 @@ def train():
     return jsonify({"ok": True, "saved": saved, **manifest})
 
 
-# ── /model_status ─────────────────────────────────────────────────────
+# -- /model_status
 @app.route("/model_status")
 def model_status():
     if not _check_token():
@@ -573,50 +535,54 @@ def _model_status():
     return {"trained": False}
 
 
-# ── /api/lookup ───────────────────────────────────────────────────────
+# -- voice-settings resolution
+def _resolve_voice_settings(call_type: str) -> dict:
+    try:
+        custom = importlib.import_module("custom_voice_config")
+        fn = getattr(custom, "get_custom_voice_settings", None)
+        if callable(fn):
+            result = fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = getattr(custom, "CUSTOM_VOICE_ID", _GEMINI_DEFAULT_VOICE)
+                return resolved
+    except Exception:
+        pass
+    try:
+        if callable(_default_voice_fn):
+            result = _default_voice_fn(call_type or "LEGITIMATE")
+            if isinstance(result, dict):
+                resolved = dict(result)
+                if not resolved.get("voice_id"):
+                    resolved["voice_id"] = _GEMINI_DEFAULT_VOICE
+                return resolved
+    except Exception:
+        pass
+    return {"voice_id": _GEMINI_DEFAULT_VOICE}
+
+
+# -- /api/lookup
 @app.route("/api/lookup", methods=["POST"])
 @limiter.limit("20 per minute")
 def api_lookup():
-    """
-    Real-data intelligence lookup for domains, IPs, and phone numbers.
-
-    Request body (JSON):
-        { "query": "<domain | IPv4 | phone number>" }
-
-    Response (JSON):
-        {
-          "query":     "<original input>",
-          "type":      "domain" | "ip" | "phone" | "unknown",
-          "timestamp": "<ISO-8601 UTC>",
-          ...type-specific fields
-        }
-
-    Auth:       X-Voice-Token header (when VOICE_SERVER_TOKEN is set)
-    Rate-limit: 20 requests / minute per IP
-    """
     if not _check_token():
         return jsonify({"error": "Unauthorized"}), 401
-
     if not _LOOKUP_OK:
         return jsonify({"error": "lookup_engine not available — ensure lookup_engine.py is present"}), 503
-
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify({"error": "Invalid JSON body"}), 400
-
     query = (data.get("query") or "").strip()
     if not query:
         return jsonify({"error": "query is required"}), 400
     if len(query) > 253:
         return jsonify({"error": "query too long"}), 400
-
-    # Block private/loopback ranges to prevent SSRF-style abuse
     _private = re.compile(
         r'^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|::1$|0\.0\.0\.0$)'
     )
     if _private.match(query):
         return jsonify({"error": "Private or loopback addresses are not supported"}), 400
-
     try:
         result = _lookup_engine.lookup(query)
         return jsonify(_filter_lookup_result(result))
@@ -625,27 +591,24 @@ def api_lookup():
         return jsonify({"error": "Lookup failed"}), 500
 
 
-# ── run ───────────────────────────────────────────────────────────────
+# -- run
 if __name__ == "__main__":
     _loopback      = {"127.0.0.1", "::1", "localhost"}
     _allow_network = os.environ.get("ALLOW_NETWORK_BINDING", "").strip() == "1"
     _requested_host = os.environ.get("HOST", "127.0.0.1").strip()
-
     if _requested_host not in _loopback and not _allow_network:
         print(
-            f"ERROR: HOST={_requested_host!r} is not a loopback address.  "
+            f"ERROR: HOST={_requested_host!r} is not a loopback address. "
             "Set ALLOW_NETWORK_BINDING=1 if you understand the risk.",
             file=sys.stderr,
         )
         sys.exit(1)
-
     if _allow_network and _requested_host not in _loopback:
         print(
             f"WARNING: ALLOW_NETWORK_BINDING=1 — binding to {_requested_host!r}, "
             "server is reachable from the network.",
             file=sys.stderr,
         )
-
     host = _requested_host if _allow_network else "127.0.0.1"
     port = int(os.environ.get("PORT", 5001))
     app.run(host=host, port=port, debug=False)
