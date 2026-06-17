@@ -445,10 +445,27 @@
               break;
             case "speak_response":
               if (data.audio_base64) {
-                const dataUrl = `data:${data.mime_type};base64,${data.audio_base64}`;
-                const player = document.getElementById("audio-player");
-                player.src = dataUrl;
-                player.play();
+                const allowedAudioMimeTypes = new Set([
+                  "audio/mpeg",
+                  "audio/wav",
+                  "audio/ogg",
+                  "audio/webm",
+                ]);
+                const mimeType =
+                  typeof data.mime_type === "string" ? data.mime_type : "";
+                const audioBase64 =
+                  typeof data.audio_base64 === "string" ? data.audio_base64 : "";
+                const isValidBase64 =
+                  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+                    audioBase64,
+                  );
+
+                if (allowedAudioMimeTypes.has(mimeType) && isValidBase64) {
+                  const dataUrl = `data:${mimeType};base64,${audioBase64}`;
+                  const player = document.getElementById("audio-player");
+                  player.src = dataUrl;
+                  player.play();
+                }
               }
               break;
             case "trigger_alert":
